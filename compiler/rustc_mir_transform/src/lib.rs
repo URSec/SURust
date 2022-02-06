@@ -75,6 +75,9 @@ mod simplify_try;
 mod uninhabited_enum_branching;
 mod unreachable_prop;
 
+// Sandbox unsafe Rust
+mod sandbox;
+
 use rustc_const_eval::transform::check_consts;
 use rustc_const_eval::transform::promote_consts;
 use rustc_const_eval::transform::validate;
