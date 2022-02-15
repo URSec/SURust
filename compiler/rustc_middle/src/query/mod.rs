@@ -426,6 +426,13 @@ rustc_queries! {
         }
     }
 
+    /// Sandboxing unsafe Rust related.
+    query unsafe_obj_mir(key: DefId) -> Option<Vec<mir::Place<'tcx>>> {
+        desc {
+            "computing where an unsafe object is defined or declared"
+        }
+    }
+
     /// Erases regions from `ty` to yield a new type.
     /// Normally you would just use `tcx.erase_regions(value)`,
     /// however, which uses this query as a kind of cache.

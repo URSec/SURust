@@ -4210,6 +4210,7 @@ version = "0.0.0"
 dependencies = [
  "coverage_test_macros",
  "itertools 0.9.0",
+ "lazy_static",
  "rustc_ast",
  "rustc_attr",
  "rustc_const_eval",

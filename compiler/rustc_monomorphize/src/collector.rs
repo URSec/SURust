@@ -314,6 +314,9 @@ pub fn collect_crate_mono_items(
         });
     }
 
+    // Sandboxing?
+    // TODO?: Summarizing unsafe obj related info for the current crate?
+
     (visited.into_inner(), inlining_map.into_inner())
 }
 
@@ -1394,6 +1397,14 @@ fn collect_neighbours<'tcx>(
 ) {
     debug!("collect_neighbours: {:?}", instance.def_id());
     let body = tcx.instance_mir(instance.def);
+
+    // Sandboxing unsafe Rust
+    // Collect the definitions or declarations of unsafe objects.
+    // Question: Is this the best place to insert this call?
+    //
+    // TODO: Write the collected data to a file for later summary-based
+    // inter-procedural analysis.
+    let _ = tcx.unsafe_obj_mir(instance.def.def_id());
 
     MirNeighborCollector { tcx, body: &body, output, instance }.visit_body(&body);
 }

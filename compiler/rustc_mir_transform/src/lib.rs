@@ -17,6 +17,8 @@
 extern crate tracing;
 #[macro_use]
 extern crate rustc_middle;
+#[macro_use]
+extern crate lazy_static;
 
 use required_consts::RequiredConstsVisitor;
 use rustc_const_eval::util;
@@ -74,8 +76,6 @@ mod simplify_comparison_integral;
 mod simplify_try;
 mod uninhabited_enum_branching;
 mod unreachable_prop;
-
-// Sandbox unsafe Rust
 mod sandbox;
 
 use rustc_const_eval::transform::check_consts;
@@ -123,6 +123,7 @@ pub fn provide(providers: &mut Providers) {
         promoted_mir_of_const_arg: |tcx, (did, param_did)| {
             promoted_mir(tcx, ty::WithOptConstParam { did, const_param_did: Some(param_did) })
         },
+        sandbox::unsafe_obj::provide(providers);
         ..*providers
     };
 }
