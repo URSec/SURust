@@ -123,9 +123,9 @@ pub fn provide(providers: &mut Providers) {
         promoted_mir_of_const_arg: |tcx, (did, param_did)| {
             promoted_mir(tcx, ty::WithOptConstParam { did, const_param_did: Some(param_did) })
         },
-        sandbox::unsafe_obj::provide(providers);
         ..*providers
     };
+    sandbox::unsafe_obj::provide(providers);
 }
 
 fn is_mir_available(tcx: TyCtxt<'_>, def_id: DefId) -> bool {

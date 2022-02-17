@@ -20,7 +20,7 @@ lazy_static!{
     };
 }
 
-// Check if a fn, statement, or a terminator is in an unsafe block.
+// Check if a fn, statement, or a terminator is unsafe or in a block.
 #[allow(dead_code)]
 fn is_unsafe(body: &Body<'tcx>, scope: SourceScope) -> bool {
     match body.source_scopes[scope].local_data.as_ref() {
@@ -71,6 +71,22 @@ fn is_builtin_or_std(tcx: TyCtxt<'tcx>, def_id: DefId) -> bool {
            crate_name == "backtrace";
 }
 
+#[inline(always)]
+fn print_stmt(type_name: &str, stmt: &Statement<'_>) {
+    println!("[{}]: {:?}", type_name, stmt);
+}
+
+/// Handle StatementKind::Assign separately as the RValue can be complex.
+fn handle_assign(_rvalue: &Rvalue<'tcx>, _result: &mut Vec<Place<'tcx>>) {
+    // TODO
+}
+
+/// Handle CopyNonOverlapping separately as it is more complex than most
+/// types StatementKind statements.
+fn handle_copynonoverlap(_stmt: &CopyNonOverlapping<'tcx>, _result: &mut Vec<Place<'tcx>>) {
+    // TODO: Handle CopyNonOverlapping
+}
+
 /// This function finds the definition or declaration of each memory object
 /// used in unsafe code.
 fn find_unsafe_obj(tcx: TyCtxt<'tcx>, def_id: DefId) -> Option<Vec<Place<'tcx>>> {
@@ -85,7 +101,7 @@ fn find_unsafe_obj(tcx: TyCtxt<'tcx>, def_id: DefId) -> Option<Vec<Place<'tcx>>>
     }
 
     // Start of the computation.
-    // println!("[find_unsafe_obj]: Processing {:?}", name);
+    println!("[find_unsafe_obj]: Processing {:?}", name);
     let body = tcx.optimized_mir(def_id);
 
     // Check if this is an unsafe fn.
@@ -93,21 +109,63 @@ fn find_unsafe_obj(tcx: TyCtxt<'tcx>, def_id: DefId) -> Option<Vec<Place<'tcx>>>
         // TODO: Process the whole function.
     }
 
-    let result = Vec::new();
+    // let mut result = Vec::new();
+    let mut result = Vec::new();
+    // let mut unsafe_stmts = Vec::new();
     for bb in body.basic_blocks() {
         for stmt in &bb.statements {
             if !is_unsafe(body, stmt.source_info.scope) {
                 continue;
             }
-            // println!("[Unsafe stmt]: {:?}", stmt);
+            // unsafe_stmts.push(stmt);
             // TODO: Process the stmt.
+            match &stmt.kind {
+                StatementKind::Assign(box (place, rvalue)) => {
+                    print_stmt("Assign", stmt);
+                    result.push(*place);
+                    // TODO: Handle rvalue
+                    handle_assign(rvalue, &mut result);
+                    // Will the "box ..." syntax creates a new heap object?
+                    // If so this might be too slow.
+                },
+                StatementKind::FakeRead(box (_cause, _place)) => {
+                    print_stmt("FakeRead", stmt);
+                    // TODO: Handle FakeRead
+                    panic!("Need manually examine this FakeRead");
+                },
+                StatementKind::SetDiscriminant {box place, ..} => {
+                    print_stmt("SetDiscriminant", stmt);
+                    result.push(*place);
+                },
+                StatementKind::Retag(_, box place) => {
+                    // What exactly is a retag inst?
+                    print_stmt("Retag", stmt);
+                    result.push(*place);
+                },
+                StatementKind::AscribeUserType(box (place, _), _) => {
+                    print_stmt("AscribeUserType", stmt);
+                    result.push(*place);
+                },
+                StatementKind::CopyNonOverlapping(box copy_non_overlap) => {
+                    print_stmt("CopyNonOverlapping", stmt);
+                    handle_copynonoverlap(copy_non_overlap, &mut result);
+                },
+                StatementKind::StorageLive(_)
+                | StatementKind::StorageDead(_)
+                | StatementKind::LlvmInlineAsm(_)
+                | StatementKind::Coverage(_)
+                | StatementKind::Nop => {
+                    print_stmt("Others: {:?}", stmt);
+                }
+
+            }
         }
 
+        // TODO: Process the terminator.
         let terminator = &bb.terminator();
         if !is_unsafe(body, terminator.source_info.scope) {
             continue;
         }
-        // TODO: Process the terminator.
     }
 
     Some(result)
