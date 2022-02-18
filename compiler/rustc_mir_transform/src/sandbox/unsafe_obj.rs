@@ -2,23 +2,8 @@ use rustc_middle::mir::*;
 use rustc_middle::ty::{TyCtxt};
 use rustc_middle::ty::query::Providers;
 use rustc_hir::def_id::{DefId};
-use rustc_data_structures::fx::{FxHashSet};
 
-// This function whitelist is a helper for development only.
-lazy_static!{
-    static ref FN_TO_PROCESS: FxHashSet<String> = {
-        let mut vec = Vec::new();
-        vec.push("foo".to_string());
-        vec.push("bar".to_string());
-        // vec.push("main".to_string());
-        // For exa (https://github.com/ogham/exa)
-        vec.push("add_files_to_table".to_string());
-        vec.push("translate_attribute_name".to_string());
-        vec.push("listxattr_first".to_string());
-
-        vec.into_iter().collect()
-    };
-}
+use super::debug::*;
 
 // Check if a fn, statement, or a terminator is unsafe or in a block.
 #[allow(dead_code)]
@@ -72,23 +57,82 @@ fn is_builtin_or_std(tcx: TyCtxt<'tcx>, def_id: DefId) -> bool {
 }
 
 #[inline(always)]
-fn print_stmt(type_name: &str, stmt: &Statement<'_>) {
-    println!("[{}]: {:?}", type_name, stmt);
+fn get_place_from_operand(operand: &Operand<'tcx>, places: &mut Vec<Place<'tcx>>) {
+    match operand {
+        // Should we ignore temporary values?
+        Operand::Copy(place) => {
+            places.push(*place);
+        },
+        Operand::Move(place) => {
+            places.push(*place);
+        },
+        Operand::Constant(_) => {}
+    }
 }
 
 /// Handle StatementKind::Assign separately as the RValue can be complex.
-fn handle_assign(_rvalue: &Rvalue<'tcx>, _result: &mut Vec<Place<'tcx>>) {
-    // TODO
+fn handle_assign(rvalue: &Rvalue<'tcx>, places: &mut Vec<Place<'tcx>>) {
+    match rvalue {
+        Rvalue::Use(operand) => {
+            get_place_from_operand(operand, places);
+        },
+        Rvalue::Repeat(operand, _num) => {
+           get_place_from_operand(operand, places);
+        },
+        Rvalue::Ref(_, _, place) => {
+            places.push(*place);
+        },
+        Rvalue::ThreadLocalRef(_def_id) => {
+            // TODO: How to deal with this?
+            panic!("Unhandled Rvalue::ThreadLocalRef");
+        },
+        Rvalue::AddressOf(_, place) => {
+            places.push(*place);
+        },
+        Rvalue::Len(place) => {
+            places.push(*place);
+        },
+        Rvalue::Cast(_, operand, _) => {
+           get_place_from_operand(operand, places);
+        },
+        Rvalue::BinaryOp(_, box (ref lhs, ref rhs))
+        | Rvalue::CheckedBinaryOp(_, box (ref lhs, ref rhs)) => {
+           get_place_from_operand(lhs, places);
+           get_place_from_operand(rhs, places);
+        },
+        Rvalue::UnaryOp(_, operand) => {
+           get_place_from_operand(operand, places);
+        },
+        Rvalue::Discriminant(place) => {
+            places.push(*place);
+        },
+        Rvalue::Aggregate(_, operands) => {
+            // Do we need to collect each field? Or should we just find out the
+            // single allocation site for the whole aggregate, if that is
+            // represented in MIR?
+            for operand in operands {
+                get_place_from_operand(operand, places);
+            }
+        },
+        Rvalue::ShallowInitBox(operand, _) => {
+            get_place_from_operand(operand, places);
+        },
+        _ => {}
+    }
 }
 
 /// Handle CopyNonOverlapping separately as it is more complex than most
 /// types StatementKind statements.
-fn handle_copynonoverlap(_stmt: &CopyNonOverlapping<'tcx>, _result: &mut Vec<Place<'tcx>>) {
+fn handle_copynonoverlap(_stmt: &CopyNonOverlapping<'tcx>, _places: &mut Vec<Place<'tcx>>) {
     // TODO: Handle CopyNonOverlapping
 }
 
 /// This function finds the definition or declaration of each memory object
 /// used in unsafe code.
+///
+/// TODO: Currently this function only finds the Place used in each Statement
+/// and Terminator, but not the real definition site. A Place can be quite
+/// complex. We need analyze each Place to extract the real allocation site.
 fn find_unsafe_obj(tcx: TyCtxt<'tcx>, def_id: DefId) -> Option<Vec<Place<'tcx>>> {
     // Filter out uninterested functions.
    if is_builtin_or_std(tcx, def_id) {
@@ -109,8 +153,8 @@ fn find_unsafe_obj(tcx: TyCtxt<'tcx>, def_id: DefId) -> Option<Vec<Place<'tcx>>>
         // TODO: Process the whole function.
     }
 
-    // let mut result = Vec::new();
-    let mut result = Vec::new();
+    // let mut places = Vec::new();
+    let mut places = Vec::new();
     // let mut unsafe_stmts = Vec::new();
     for bb in body.basic_blocks() {
         for stmt in &bb.statements {
@@ -121,10 +165,9 @@ fn find_unsafe_obj(tcx: TyCtxt<'tcx>, def_id: DefId) -> Option<Vec<Place<'tcx>>>
             // TODO: Process the stmt.
             match &stmt.kind {
                 StatementKind::Assign(box (place, rvalue)) => {
-                    print_stmt("Assign", stmt);
-                    result.push(*place);
-                    // TODO: Handle rvalue
-                    handle_assign(rvalue, &mut result);
+                    print_stmt_assign(stmt, rvalue);
+                    places.push(*place);
+                    handle_assign(rvalue, &mut places);
                     // Will the "box ..." syntax creates a new heap object?
                     // If so this might be too slow.
                 },
@@ -135,28 +178,26 @@ fn find_unsafe_obj(tcx: TyCtxt<'tcx>, def_id: DefId) -> Option<Vec<Place<'tcx>>>
                 },
                 StatementKind::SetDiscriminant {box place, ..} => {
                     print_stmt("SetDiscriminant", stmt);
-                    result.push(*place);
+                    places.push(*place);
                 },
                 StatementKind::Retag(_, box place) => {
                     // What exactly is a retag inst?
                     print_stmt("Retag", stmt);
-                    result.push(*place);
+                    places.push(*place);
                 },
                 StatementKind::AscribeUserType(box (place, _), _) => {
                     print_stmt("AscribeUserType", stmt);
-                    result.push(*place);
+                    places.push(*place);
                 },
                 StatementKind::CopyNonOverlapping(box copy_non_overlap) => {
                     print_stmt("CopyNonOverlapping", stmt);
-                    handle_copynonoverlap(copy_non_overlap, &mut result);
+                    handle_copynonoverlap(copy_non_overlap, &mut places);
                 },
                 StatementKind::StorageLive(_)
                 | StatementKind::StorageDead(_)
                 | StatementKind::LlvmInlineAsm(_)
                 | StatementKind::Coverage(_)
-                | StatementKind::Nop => {
-                    print_stmt("Others: {:?}", stmt);
-                }
+                | StatementKind::Nop => { }
 
             }
         }
@@ -168,5 +209,9 @@ fn find_unsafe_obj(tcx: TyCtxt<'tcx>, def_id: DefId) -> Option<Vec<Place<'tcx>>>
         }
     }
 
-    Some(result)
+    if !places.is_empty() {
+        println!("");
+    }
+
+    Some(places)
 }

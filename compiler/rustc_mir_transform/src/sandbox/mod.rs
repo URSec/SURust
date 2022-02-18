@@ -9,3 +9,4 @@
 //! unsafe objects (taint propagation) based on what we get from step 1.
 
 crate mod unsafe_obj;
+crate mod debug;
