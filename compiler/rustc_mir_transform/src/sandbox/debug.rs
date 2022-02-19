@@ -80,3 +80,9 @@ crate fn print_stmt(type_name: &str, stmt: &Statement<'_>) {
 crate fn print_operand(type_name: &str, operand: &Operand<'tcx>) {
     println!("[{}]: {:?}", type_name, operand);
 }
+
+#[allow(dead_code)]
+#[inline(always)]
+crate fn print_terminator(type_name: &str, terminator: &Terminator<'_>) {
+    println!("[{}]: {:?}", type_name, terminator);
+}

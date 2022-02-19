@@ -162,7 +162,6 @@ fn find_unsafe_obj(tcx: TyCtxt<'tcx>, def_id: DefId) -> Option<Vec<Place<'tcx>>>
                 continue;
             }
             // unsafe_stmts.push(stmt);
-            // TODO: Process the stmt.
             match &stmt.kind {
                 StatementKind::Assign(box (place, rvalue)) => {
                     print_stmt_assign(stmt, rvalue);
@@ -202,10 +201,38 @@ fn find_unsafe_obj(tcx: TyCtxt<'tcx>, def_id: DefId) -> Option<Vec<Place<'tcx>>>
             }
         }
 
-        // TODO: Process the terminator.
         let terminator = &bb.terminator();
         if !is_unsafe(body, terminator.source_info.scope) {
             continue;
+        }
+        match &terminator.kind {
+            TerminatorKind::SwitchInt{discr, ..} => {
+                print_terminator("SwitchInt", terminator);
+                get_place_from_operand(discr, &mut places);
+            },
+            TerminatorKind::Drop{place, ..} => {
+                places.push(*place);
+            },
+            TerminatorKind::DropAndReplace{place, value, ..} => {
+                places.push(*place);
+                get_place_from_operand(value, &mut places);
+            },
+            TerminatorKind::Call{func: _, args, ..} => {
+                // For some unknown reason(s), printing a Call in println! will
+                // crash the compiler.
+                // What is the Place in "destination: Option<(Place<'tcx>, BasicBlock)"?
+                for arg in args {
+                    get_place_from_operand(arg, &mut places);
+                }
+            },
+            TerminatorKind::Assert{cond, ..} => {
+                get_place_from_operand(cond, &mut places);
+            },
+            TerminatorKind::Yield{value, resume: _, resume_arg, ..} => {
+                get_place_from_operand(value, &mut places);
+                places.push(*resume_arg);
+            },
+            _ => {}
         }
     }
 
