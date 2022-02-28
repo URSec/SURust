@@ -76,7 +76,7 @@ mod simplify_comparison_integral;
 mod simplify_try;
 mod uninhabited_enum_branching;
 mod unreachable_prop;
-mod sandbox;
+pub mod sandbox;
 
 use rustc_const_eval::transform::check_consts;
 use rustc_const_eval::transform::promote_consts;
@@ -125,7 +125,6 @@ pub fn provide(providers: &mut Providers) {
         },
         ..*providers
     };
-    sandbox::unsafe_obj::provide(providers);
 }
 
 fn is_mir_available(tcx: TyCtxt<'_>, def_id: DefId) -> bool {

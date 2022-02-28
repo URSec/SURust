@@ -206,6 +206,9 @@ use std::iter;
 use std::ops::Range;
 use std::path::PathBuf;
 
+// Sandboxing
+use rustc_mir_transform::sandbox::unsafe_obj;
+
 #[derive(PartialEq)]
 pub enum MonoItemCollectionMode {
     Eager,
@@ -433,7 +436,7 @@ fn collect_items_rec<'tcx>(
             //
             // TODO: Write the collected data to a file for later summary-based
             // inter-procedural analysis.
-            let _ = tcx.unsafe_obj_mir(instance.def.def_id());
+            let _ = unsafe_obj::find_unsafe_obj(tcx, instance.def.def_id());
         }
         MonoItem::GlobalAsm(item_id) => {
             recursion_depth_reset = None;

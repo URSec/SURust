@@ -7,7 +7,9 @@ lazy_static!{
         let mut vec = Vec::new();
         vec.push("foo".to_string());
         vec.push("bar".to_string());
-        // vec.push("main".to_string());
+        vec.push("f0".to_string());
+        vec.push("f1".to_string());
+
         // For exa (https://github.com/ogham/exa)
         vec.push("add_files_to_table".to_string());
         vec.push("translate_attribute_name".to_string());
@@ -85,4 +87,11 @@ crate fn print_operand(type_name: &str, operand: &Operand<'tcx>) {
 #[inline(always)]
 crate fn print_terminator(type_name: &str, terminator: &Terminator<'_>) {
     println!("[{}]: {:?}", type_name, terminator);
+}
+
+
+#[allow(dead_code)]
+#[inline(always)]
+crate fn print_local(type_name: &str, local: Local) {
+    println!("{:?} is a {}", local, type_name);
 }

@@ -1,6 +1,5 @@
 use rustc_middle::mir::*;
 use rustc_middle::ty::{TyCtxt};
-use rustc_middle::ty::query::Providers;
 use rustc_hir::def_id::{DefId};
 
 use super::debug::*;
@@ -17,11 +16,6 @@ fn is_unsafe(body: &Body<'tcx>, scope: SourceScope) -> bool {
             }
         }
     }
-}
-
-/// Register sandboxing related queries.
-crate fn provide(providers: &mut Providers) {
-    providers.unsafe_obj_mir = |tcx, def_id| find_unsafe_obj(tcx, def_id);
 }
 
 // A helper function that filters out uninterested functions. This is for
@@ -71,7 +65,7 @@ fn get_place_from_operand(operand: &Operand<'tcx>, places: &mut Vec<Place<'tcx>>
 }
 
 /// Handle StatementKind::Assign separately as the RValue can be complex.
-fn handle_assign(rvalue: &Rvalue<'tcx>, places: &mut Vec<Place<'tcx>>) {
+fn handle_rvalue(rvalue: &Rvalue<'tcx>, places: &mut Vec<Place<'tcx>>) {
     match rvalue {
         Rvalue::Use(operand) => {
             get_place_from_operand(operand, places);
@@ -133,7 +127,7 @@ fn handle_copynonoverlap(_stmt: &CopyNonOverlapping<'tcx>, _places: &mut Vec<Pla
 /// TODO: Currently this function only finds the Place used in each Statement
 /// and Terminator, but not the real definition site. A Place can be quite
 /// complex. We need analyze each Place to extract the real allocation site.
-fn find_unsafe_obj(tcx: TyCtxt<'tcx>, def_id: DefId) -> Option<Vec<Place<'tcx>>> {
+pub fn find_unsafe_obj(tcx: TyCtxt<'tcx>, def_id: DefId) -> Option<Vec<Place<'tcx>>> {
     // Filter out uninterested functions.
    if is_builtin_or_std(tcx, def_id) {
        return None;
@@ -166,7 +160,7 @@ fn find_unsafe_obj(tcx: TyCtxt<'tcx>, def_id: DefId) -> Option<Vec<Place<'tcx>>>
                 StatementKind::Assign(box (place, rvalue)) => {
                     print_stmt_assign(stmt, rvalue);
                     places.push(*place);
-                    handle_assign(rvalue, &mut places);
+                    handle_rvalue(rvalue, &mut places);
                     // Will the "box ..." syntax creates a new heap object?
                     // If so this might be too slow.
                 },
