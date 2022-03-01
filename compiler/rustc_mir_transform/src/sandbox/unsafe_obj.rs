@@ -1,8 +1,19 @@
 use rustc_middle::mir::*;
 use rustc_middle::ty::{TyCtxt};
 use rustc_hir::def_id::{DefId};
+use rustc_data_structures::fx::{FxHashSet};
 
 use super::debug::*;
+
+/// An unsafe operation (a statement or a terminator) in an unsafe block/fn.
+struct UnsafeOp <'tcx> {
+    // All Place used in this statement or terminator
+    places: Vec<Place<'tcx>>,
+    _stmt: Option<&'tcx Statement<'tcx>>,
+    _terminator: Option<&'tcx Terminator<'tcx>>,
+    // Location of the statement or terminator
+    _location: Location,
+}
 
 // Check if a fn, statement, or a terminator is unsafe or in a block.
 #[allow(dead_code)]
@@ -65,7 +76,7 @@ fn get_place_from_operand(operand: &Operand<'tcx>, places: &mut Vec<Place<'tcx>>
 }
 
 /// Handle StatementKind::Assign separately as the RValue can be complex.
-fn handle_rvalue(rvalue: &Rvalue<'tcx>, places: &mut Vec<Place<'tcx>>) {
+fn get_place_in_rvalue(rvalue: &Rvalue<'tcx>, places: &mut Vec<Place<'tcx>>) {
     match rvalue {
         Rvalue::Use(operand) => {
             get_place_from_operand(operand, places);
@@ -121,21 +132,63 @@ fn handle_copynonoverlap(_stmt: &CopyNonOverlapping<'tcx>, _places: &mut Vec<Pla
     // TODO: Handle CopyNonOverlapping
 }
 
+/// Examine each unsafe statement or terminator in unsafe blocks, and find
+/// either the corresponding definition point in this function or
+/// the declaration for pointers argument.
+fn handle_unsafe_op(unsafe_ops: &Vec<Box<UnsafeOp<'tcx>>>, body: &Body<'tcx>) {
+    let mut processed = FxHashSet::default();
+    let mut places = Vec::new();
+
+    for unsafe_op in unsafe_ops {
+        for place in &unsafe_op.places {
+            places.push(place);
+        }
+    }
+
+    println!("[handle_places]");
+    for place in places {
+        let local = place.local;
+        if processed.contains(&local.as_u32()) {
+            continue;
+        } else {
+            processed.insert(local.as_u32());
+        }
+
+        match body.local_kind(local) {
+            LocalKind::Var => {
+                print_local("Var", local);
+            },
+            LocalKind::Arg => {
+                print_local("Argument", local);
+            },
+            LocalKind::Temp => {
+                print_local("Temp", local);
+                // TODO
+            },
+            LocalKind::ReturnPointer => {
+                print_local("ReturnPointer", local);
+                // TODO
+            }
+        }
+    }
+
+}
+
 /// This function finds the definition or declaration of each memory object
 /// used in unsafe code.
 ///
 /// TODO: Currently this function only finds the Place used in each Statement
 /// and Terminator, but not the real definition site. A Place can be quite
 /// complex. We need analyze each Place to extract the real allocation site.
-pub fn find_unsafe_obj(tcx: TyCtxt<'tcx>, def_id: DefId) -> Option<Vec<Place<'tcx>>> {
+pub fn find_unsafe_obj(tcx: TyCtxt<'tcx>, def_id: DefId) {
     // Filter out uninterested functions.
    if is_builtin_or_std(tcx, def_id) {
-       return None;
+       return;
    }
 
     let name = tcx.opt_item_name(def_id);
     if name.is_none() || ignore_fn(tcx, def_id) {
-        return None;
+        return;
     }
 
     // Start of the computation.
@@ -147,20 +200,22 @@ pub fn find_unsafe_obj(tcx: TyCtxt<'tcx>, def_id: DefId) -> Option<Vec<Place<'tc
         // TODO: Process the whole function.
     }
 
-    // let mut places = Vec::new();
-    let mut places = Vec::new();
+    let mut unsafe_ops = Vec::new();
     // let mut unsafe_stmts = Vec::new();
-    for bb in body.basic_blocks() {
-        for stmt in &bb.statements {
+    for (bb, data) in body.basic_blocks().iter_enumerated() {
+        for (i, stmt) in data.statements.iter().enumerate() {
             if !is_unsafe(body, stmt.source_info.scope) {
                 continue;
             }
-            // unsafe_stmts.push(stmt);
+
+            let mut unsafe_op = box UnsafeOp {places: Vec::new(),
+                _stmt: Some(stmt), _terminator: None,
+                _location: Location {block: bb, statement_index: i}};
             match &stmt.kind {
                 StatementKind::Assign(box (place, rvalue)) => {
                     print_stmt_assign(stmt, rvalue);
-                    places.push(*place);
-                    handle_rvalue(rvalue, &mut places);
+                    unsafe_op.places.push(*place);
+                    get_place_in_rvalue(rvalue, &mut unsafe_op.places);
                     // Will the "box ..." syntax creates a new heap object?
                     // If so this might be too slow.
                 },
@@ -171,20 +226,20 @@ pub fn find_unsafe_obj(tcx: TyCtxt<'tcx>, def_id: DefId) -> Option<Vec<Place<'tc
                 },
                 StatementKind::SetDiscriminant {box place, ..} => {
                     print_stmt("SetDiscriminant", stmt);
-                    places.push(*place);
+                    unsafe_op.places.push(*place);
                 },
                 StatementKind::Retag(_, box place) => {
                     // What exactly is a retag inst?
                     print_stmt("Retag", stmt);
-                    places.push(*place);
+                    unsafe_op.places.push(*place);
                 },
                 StatementKind::AscribeUserType(box (place, _), _) => {
                     print_stmt("AscribeUserType", stmt);
-                    places.push(*place);
+                    unsafe_op.places.push(*place);
                 },
                 StatementKind::CopyNonOverlapping(box copy_non_overlap) => {
                     print_stmt("CopyNonOverlapping", stmt);
-                    handle_copynonoverlap(copy_non_overlap, &mut places);
+                    handle_copynonoverlap(copy_non_overlap, &mut unsafe_op.places);
                 },
                 StatementKind::StorageLive(_)
                 | StatementKind::StorageDead(_)
@@ -193,46 +248,56 @@ pub fn find_unsafe_obj(tcx: TyCtxt<'tcx>, def_id: DefId) -> Option<Vec<Place<'tc
                 | StatementKind::Nop => { }
 
             }
+            if !unsafe_op.places.is_empty() {
+                unsafe_ops.push(unsafe_op);
+            }
         }
 
-        let terminator = &bb.terminator();
+        let terminator = &data.terminator();
         if !is_unsafe(body, terminator.source_info.scope) {
             continue;
         }
+
+        let mut unsafe_op = box UnsafeOp {places: Vec::new(),
+            _stmt: None, _terminator: Some(terminator),
+            _location: Location {block: bb, statement_index: data.statements.len()}};
         match &terminator.kind {
             TerminatorKind::SwitchInt{discr, ..} => {
                 print_terminator("SwitchInt", terminator);
-                get_place_from_operand(discr, &mut places);
+                get_place_from_operand(discr, &mut unsafe_op.places);
             },
             TerminatorKind::Drop{place, ..} => {
-                places.push(*place);
+                unsafe_op.places.push(*place);
             },
             TerminatorKind::DropAndReplace{place, value, ..} => {
-                places.push(*place);
-                get_place_from_operand(value, &mut places);
+                unsafe_op.places.push(*place);
+                get_place_from_operand(value, &mut unsafe_op.places);
             },
             TerminatorKind::Call{func: _, args, ..} => {
                 // For some unknown reason(s), printing a Call in println! will
                 // crash the compiler.
                 // What is the Place in "destination: Option<(Place<'tcx>, BasicBlock)"?
                 for arg in args {
-                    get_place_from_operand(arg, &mut places);
+                    get_place_from_operand(arg, &mut unsafe_op.places);
                 }
             },
             TerminatorKind::Assert{cond, ..} => {
-                get_place_from_operand(cond, &mut places);
+                get_place_from_operand(cond, &mut unsafe_op.places);
             },
             TerminatorKind::Yield{value, resume: _, resume_arg, ..} => {
-                get_place_from_operand(value, &mut places);
-                places.push(*resume_arg);
+                get_place_from_operand(value, &mut unsafe_op.places);
+                unsafe_op.places.push(*resume_arg);
             },
             _ => {}
         }
+        if !unsafe_op.places.is_empty() {
+            unsafe_ops.push(unsafe_op);
+        }
     }
 
-    if !places.is_empty() {
-        println!("");
-    }
+    if !unsafe_ops.is_empty() {
+        handle_unsafe_op(&unsafe_ops, body);
 
-    Some(places)
+        println!("Found {} unsafe statements/terminators", unsafe_ops.len());
+    }
 }
