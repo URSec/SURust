@@ -1,7 +1,7 @@
 use rustc_middle::mir::*;
 use rustc_middle::ty::{TyCtxt};
 use rustc_hir::def_id::{DefId};
-use rustc_data_structures::fx::{FxHashSet};
+use rustc_data_structures::fx::{FxHashSet, FxHashMap};
 
 use super::debug::*;
 
@@ -9,10 +9,24 @@ use super::debug::*;
 struct UnsafeOp <'tcx> {
     // All Place used in this statement or terminator
     places: Vec<Place<'tcx>>,
-    _stmt: Option<&'tcx Statement<'tcx>>,
-    _terminator: Option<&'tcx Terminator<'tcx>>,
     // Location of the statement or terminator
-    _location: Location,
+    location: Location,
+}
+
+#[allow(dead_code)]
+enum Operation <'tcx> {
+    Stmt(&'tcx Statement<'tcx>),
+    Term(&'tcx Terminator<'tcx>)
+}
+
+#[allow(dead_code)]
+enum UnsafeAllocSite<'tcx> {
+    // A heap allocation call, such as Vec::new() or Box::new().
+    Alloc(&'tcx Terminator<'tcx>),
+    // Returned pointer from a non-heap-alloc function call.
+    Ret(&'tcx Terminator<'tcx>),
+    // Argument of a function.
+    Arg(Place<'tcx>),
 }
 
 // Check if a fn, statement, or a terminator is unsafe or in a block.
@@ -127,59 +141,67 @@ fn get_place_in_rvalue(rvalue: &Rvalue<'tcx>, places: &mut Vec<Place<'tcx>>) {
 }
 
 /// Handle CopyNonOverlapping separately as it is more complex than most
-/// types StatementKind statements.
+/// other StatementKind.
 fn handle_copynonoverlap(_stmt: &CopyNonOverlapping<'tcx>, _places: &mut Vec<Place<'tcx>>) {
     // TODO: Handle CopyNonOverlapping
 }
 
-/// Examine each unsafe statement or terminator in unsafe blocks, and find
-/// either the corresponding definition point in this function or
-/// the declaration for pointers argument.
-fn handle_unsafe_op(unsafe_ops: &Vec<Box<UnsafeOp<'tcx>>>, body: &Body<'tcx>) {
-    let mut processed = FxHashSet::default();
-    let mut places = Vec::new();
+/// Core of this finding unsafe objection procedure.
+///
+/// @place_locals: The Local of all the Place used directly or indirectly (e.g.,
+///                by assignment) by unsafe code.
+/// @bb: The currently processed BasicBlock.
+/// @visited: Already processed BasicBlock.
+/// @unsafe_op: The last unsafe Operation in the current BB.
+/// @body: The function body of the current BB.
+/// @results: Unsafe allocation sites.
+fn handle_unsafe_op_core(place_locals: &mut FxHashSet<Local>,
+                          bb: &BasicBlock, _unsafe_op: &'tcx UnsafeOp<'tcx>,
+                          visited: &mut FxHashSet<BasicBlock>,
+                          _body: &Body<'tcx>,
+                          _results: &mut Vec::<UnsafeAllocSite<'tcx>>) {
+    if visited.contains(bb) {return;}
+    if place_locals.is_empty() {return;}
 
-    for unsafe_op in unsafe_ops {
-        for place in &unsafe_op.places {
-            places.push(place);
-        }
-    }
+    visited.insert(*bb);
 
-    println!("[handle_places]");
-    for place in places {
-        let local = place.local;
-        if processed.contains(&local.as_u32()) {
-            continue;
-        } else {
-            processed.insert(local.as_u32());
-        }
+    // TODO: Examine the current BB to find if there are unsafe allocation sites.
 
-        match body.local_kind(local) {
-            LocalKind::Var => {
-                print_local("Var", local);
-            },
-            LocalKind::Arg => {
-                print_local("Argument", local);
-            },
-            LocalKind::Temp => {
-                print_local("Temp", local);
-                // TODO
-            },
-            LocalKind::ReturnPointer => {
-                print_local("ReturnPointer", local);
-                // TODO
-            }
-        }
-    }
-
+    // TODO: Recursively traverse backward to the current BB's predecessors.
 }
 
-/// This function finds the definition or declaration of each memory object
-/// used in unsafe code.
-///
-/// TODO: Currently this function only finds the Place used in each Statement
-/// and Terminator, but not the real definition site. A Place can be quite
-/// complex. We need analyze each Place to extract the real allocation site.
+/// Entrance of the unsafe operation (statement/terminator) analysis function.
+/// For a BasicBlock that contains more than one unsafe operation, it traverses
+/// the BB from the last unsafe operation backwards so that there is no need to
+/// start a traversal procedure for each one of them.
+fn handle_unsafe_op(unsafe_ops: &Vec<Box<UnsafeOp<'tcx>>>, _body: &Body<'tcx>) {
+    // The Local
+    let mut place_locals = FxHashSet::<Local>::default();
+    // Map each BasicBlock to the last unsafe operation in it.
+    let mut bb_ops = FxHashMap::<BasicBlock, &UnsafeOp<'tcx>>::default();
+    // Record visited BasicBlock to avoid infinite cycles due to loop.
+    let mut visited = FxHashSet::<BasicBlock>::default();
+    // Results
+    let mut results = Vec::<UnsafeAllocSite<'tcx>>::new();
+
+    for unsafe_op in unsafe_ops {
+        // Collect all interested Place represented as u32.
+        for place in &unsafe_op.places {
+            place_locals.insert(place.local);
+        }
+        // Collect the last unsafe statement/terminator in a block.
+        bb_ops.insert(unsafe_op.location.block, unsafe_op);
+    }
+
+    // Examine each BB that contains unsafe operation(s).
+    for (bb, unsafe_op) in bb_ops {
+        handle_unsafe_op_core(&mut place_locals, &bb, &unsafe_op,
+                              &mut visited, _body, &mut results);
+    }
+}
+
+/// Entrance of this module. It finds the definition or declaration of each
+/// memory object used in unsafe code.
 pub fn find_unsafe_obj(tcx: TyCtxt<'tcx>, def_id: DefId) {
     // Filter out uninterested functions.
    if is_builtin_or_std(tcx, def_id) {
@@ -209,8 +231,8 @@ pub fn find_unsafe_obj(tcx: TyCtxt<'tcx>, def_id: DefId) {
             }
 
             let mut unsafe_op = box UnsafeOp {places: Vec::new(),
-                _stmt: Some(stmt), _terminator: None,
-                _location: Location {block: bb, statement_index: i}};
+                // stmt: Some(stmt), terminator: None,
+                location: Location {block: bb, statement_index: i}};
             match &stmt.kind {
                 StatementKind::Assign(box (place, rvalue)) => {
                     print_stmt_assign(stmt, rvalue);
@@ -259,8 +281,8 @@ pub fn find_unsafe_obj(tcx: TyCtxt<'tcx>, def_id: DefId) {
         }
 
         let mut unsafe_op = box UnsafeOp {places: Vec::new(),
-            _stmt: None, _terminator: Some(terminator),
-            _location: Location {block: bb, statement_index: data.statements.len()}};
+            // stmt: None, terminator: Some(terminator),
+            location: Location {block: bb, statement_index: data.statements.len()}};
         match &terminator.kind {
             TerminatorKind::SwitchInt{discr, ..} => {
                 print_terminator("SwitchInt", terminator);
