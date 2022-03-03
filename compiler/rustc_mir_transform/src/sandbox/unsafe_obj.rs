@@ -140,13 +140,88 @@ fn get_place_in_rvalue(rvalue: &Rvalue<'tcx>, places: &mut Vec<Place<'tcx>>) {
     }
 }
 
+/// Extract Place used in a Statement.
+fn get_place_in_stmt(stmt: &Statement<'tcx>, places: &mut Vec::<Place<'tcx>>) {
+    match &stmt.kind {
+        StatementKind::Assign(box (place, rvalue)) => {
+            print_stmt_assign(stmt, rvalue);
+            places.push(*place);
+            get_place_in_rvalue(rvalue, places);
+            // Will the "box ..." syntax creates a new heap object?
+            // If so this might be too slow.
+        },
+        StatementKind::FakeRead(box (_cause, _place)) => {
+            print_stmt("FakeRead", stmt);
+            // TODO: Handle FakeRead
+            panic!("Need manually examine this FakeRead");
+        },
+        StatementKind::SetDiscriminant {box place, ..} => {
+            print_stmt("SetDiscriminant", stmt);
+            places.push(*place);
+        },
+        StatementKind::Retag(_, box place) => {
+            // What exactly is a retag inst?
+            print_stmt("Retag", stmt);
+            places.push(*place);
+        },
+        StatementKind::AscribeUserType(box (place, _), _) => {
+            print_stmt("AscribeUserType", stmt);
+            places.push(*place);
+        },
+        StatementKind::CopyNonOverlapping(box copy_non_overlap) => {
+            print_stmt("CopyNonOverlapping", stmt);
+            handle_copynonoverlap(copy_non_overlap, places);
+        },
+        StatementKind::StorageLive(_)
+            | StatementKind::StorageDead(_)
+            | StatementKind::LlvmInlineAsm(_)
+            | StatementKind::Coverage(_)
+            | StatementKind::Nop => { }
+    }
+
+}
+
+/// Extract the Place used in a terminator.
+fn get_place_in_terminator(terminator: &Terminator<'tcx>,
+    places: &mut Vec::<Place<'tcx>>) {
+    match &terminator.kind {
+        TerminatorKind::SwitchInt{discr, ..} => {
+            print_terminator("SwitchInt", terminator);
+            get_place_from_operand(discr, places);
+        },
+        TerminatorKind::Drop{place, ..} => {
+            places.push(*place);
+        },
+        TerminatorKind::DropAndReplace{place, value, ..} => {
+            places.push(*place);
+            get_place_from_operand(value, places);
+        },
+        TerminatorKind::Call{func: _, args, ..} => {
+            // For some unknown reason(s), sometimes printing a Call in println!
+            // will crash the compiler.
+            // What is the Place in "destination: Option<(Place<'tcx>, BasicBlock)"?
+            for arg in args {
+                get_place_from_operand(arg, places);
+            }
+        },
+        TerminatorKind::Assert{cond, ..} => {
+            get_place_from_operand(cond, places);
+        },
+        TerminatorKind::Yield{value, resume: _, resume_arg, ..} => {
+            get_place_from_operand(value, places);
+            places.push(*resume_arg);
+        },
+        _ => {}
+    }
+}
+
 /// Handle CopyNonOverlapping separately as it is more complex than most
 /// other StatementKind.
 fn handle_copynonoverlap(_stmt: &CopyNonOverlapping<'tcx>, _places: &mut Vec<Place<'tcx>>) {
     // TODO: Handle CopyNonOverlapping
 }
 
-/// Core of this finding unsafe objection procedure.
+/// Core of the finding unsafe objects procedure.
 ///
 /// @place_locals: The Local of all the Place used directly or indirectly (e.g.,
 ///                by assignment) by unsafe code.
@@ -230,46 +305,11 @@ pub fn find_unsafe_obj(tcx: TyCtxt<'tcx>, def_id: DefId) {
                 continue;
             }
 
+            // Handle unsafe Statement.
             let mut unsafe_op = box UnsafeOp {places: Vec::new(),
                 // stmt: Some(stmt), terminator: None,
                 location: Location {block: bb, statement_index: i}};
-            match &stmt.kind {
-                StatementKind::Assign(box (place, rvalue)) => {
-                    print_stmt_assign(stmt, rvalue);
-                    unsafe_op.places.push(*place);
-                    get_place_in_rvalue(rvalue, &mut unsafe_op.places);
-                    // Will the "box ..." syntax creates a new heap object?
-                    // If so this might be too slow.
-                },
-                StatementKind::FakeRead(box (_cause, _place)) => {
-                    print_stmt("FakeRead", stmt);
-                    // TODO: Handle FakeRead
-                    panic!("Need manually examine this FakeRead");
-                },
-                StatementKind::SetDiscriminant {box place, ..} => {
-                    print_stmt("SetDiscriminant", stmt);
-                    unsafe_op.places.push(*place);
-                },
-                StatementKind::Retag(_, box place) => {
-                    // What exactly is a retag inst?
-                    print_stmt("Retag", stmt);
-                    unsafe_op.places.push(*place);
-                },
-                StatementKind::AscribeUserType(box (place, _), _) => {
-                    print_stmt("AscribeUserType", stmt);
-                    unsafe_op.places.push(*place);
-                },
-                StatementKind::CopyNonOverlapping(box copy_non_overlap) => {
-                    print_stmt("CopyNonOverlapping", stmt);
-                    handle_copynonoverlap(copy_non_overlap, &mut unsafe_op.places);
-                },
-                StatementKind::StorageLive(_)
-                | StatementKind::StorageDead(_)
-                | StatementKind::LlvmInlineAsm(_)
-                | StatementKind::Coverage(_)
-                | StatementKind::Nop => { }
-
-            }
+            get_place_in_stmt(&stmt, &mut unsafe_op.places);
             if !unsafe_op.places.is_empty() {
                 unsafe_ops.push(unsafe_op);
             }
@@ -280,38 +320,10 @@ pub fn find_unsafe_obj(tcx: TyCtxt<'tcx>, def_id: DefId) {
             continue;
         }
 
+        // Handle unsafe terminator.
         let mut unsafe_op = box UnsafeOp {places: Vec::new(),
-            // stmt: None, terminator: Some(terminator),
             location: Location {block: bb, statement_index: data.statements.len()}};
-        match &terminator.kind {
-            TerminatorKind::SwitchInt{discr, ..} => {
-                print_terminator("SwitchInt", terminator);
-                get_place_from_operand(discr, &mut unsafe_op.places);
-            },
-            TerminatorKind::Drop{place, ..} => {
-                unsafe_op.places.push(*place);
-            },
-            TerminatorKind::DropAndReplace{place, value, ..} => {
-                unsafe_op.places.push(*place);
-                get_place_from_operand(value, &mut unsafe_op.places);
-            },
-            TerminatorKind::Call{func: _, args, ..} => {
-                // For some unknown reason(s), printing a Call in println! will
-                // crash the compiler.
-                // What is the Place in "destination: Option<(Place<'tcx>, BasicBlock)"?
-                for arg in args {
-                    get_place_from_operand(arg, &mut unsafe_op.places);
-                }
-            },
-            TerminatorKind::Assert{cond, ..} => {
-                get_place_from_operand(cond, &mut unsafe_op.places);
-            },
-            TerminatorKind::Yield{value, resume: _, resume_arg, ..} => {
-                get_place_from_operand(value, &mut unsafe_op.places);
-                unsafe_op.places.push(*resume_arg);
-            },
-            _ => {}
-        }
+        get_place_in_terminator(&terminator, &mut unsafe_op.places);
         if !unsafe_op.places.is_empty() {
             unsafe_ops.push(unsafe_op);
         }
