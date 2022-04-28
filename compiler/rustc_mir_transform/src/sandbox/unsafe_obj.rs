@@ -7,7 +7,8 @@ use super::debug::*;
 
 /// An unsafe operation (a statement or a terminator) in an unsafe block/fn.
 struct UnsafeOp <'tcx> {
-    // All Place used in this statement or terminator
+    // All Place used in this statement or terminator.
+    // Should we use SmallVec to improve performance?
     places: Vec<Place<'tcx>>,
     // Location of the statement or terminator
     location: Location,
@@ -221,36 +222,74 @@ fn handle_copynonoverlap(_stmt: &CopyNonOverlapping<'tcx>, _places: &mut Vec<Pla
     // TODO: Handle CopyNonOverlapping
 }
 
+/// Check if a function is one that allocates a heap object, e.g, Vec::new().
+fn is_heap_alloc(func: &Constant<'tcx>) -> bool {
+    println!("[Callee]: {:?}", func);
+
+    false
+}
+
 /// Core of the finding unsafe objects procedure.
 ///
 /// @place_locals: The Local of all the Place used directly or indirectly (e.g.,
 ///                by assignment) by unsafe code.
 /// @bb: The currently processed BasicBlock.
 /// @visited: Already processed BasicBlock.
-/// @unsafe_op: The last unsafe Operation in the current BB.
+/// @op: The last unsafe Operation in an unsafe BB or the last Operation in other BB.
 /// @body: The function body of the current BB.
 /// @results: Unsafe allocation sites.
 fn handle_unsafe_op_core(place_locals: &mut FxHashSet<Local>,
-                          bb: &BasicBlock, _unsafe_op: &'tcx UnsafeOp<'tcx>,
-                          visited: &mut FxHashSet<BasicBlock>,
-                          _body: &Body<'tcx>,
-                          _results: &mut Vec::<UnsafeAllocSite<'tcx>>) {
-    if visited.contains(bb) {return;}
+                         bb: BasicBlock, unsafe_op: Option<&UnsafeOp<'tcx>>,
+                         visited: &mut FxHashSet<BasicBlock>,
+                         body: &'tcx Body<'tcx>,
+                         results: &mut Vec::<UnsafeAllocSite<'tcx>>) {
+    // Prevent infinite recursion caused by loops.
+    if visited.contains(&bb) {return;}
+    // Has handled all target Place.
     if place_locals.is_empty() {return;}
 
-    visited.insert(*bb);
+    visited.insert(bb);
 
-    // TODO: Examine the current BB to find if there are unsafe allocation sites.
+    let bbd = &body.basic_blocks()[bb];
+    let stmt_num = bbd.statements.len();
+    let location = match unsafe_op {
+        Some(op) => op.location,
+        None => Location {block: bb, statement_index: stmt_num}
+    };
+    let mut stmt_index = location.statement_index;
+    if unsafe_op.is_none() || location.statement_index == stmt_num {
+        // Examine a terminator.
+        if let TerminatorKind::Call{func: Operand::Constant(f), ..} =
+            &bbd.terminator().kind {
+            // There are three cases:
+            // 1. a heap allocation call.
+            // 2. a non-std-lib fn call that returns a pointer
+            // 3. a std-lib fn call that returns a pointer, e.g, p = v.as_ptr()
+            if is_heap_alloc(f) {
+                results.push(UnsafeAllocSite::Alloc(bbd.terminator()));
+            }
+        }
+        stmt_index -= 1;
+    }
+
+    // Examine starting from a Statement backward.
+    for i in (0..=stmt_index).rev() {
+        // TODO: Examine each statement in the current BB backward.
+        let _stmt = &bbd.statements[i];
+    }
 
     // TODO: Recursively traverse backward to the current BB's predecessors.
+    for pbb in &body.predecessors()[bb] {
+        handle_unsafe_op_core(place_locals, *pbb, None, visited, body, results);
+    }
 }
 
 /// Entrance of the unsafe operation (statement/terminator) analysis function.
 /// For a BasicBlock that contains more than one unsafe operation, it traverses
 /// the BB from the last unsafe operation backwards so that there is no need to
 /// start a traversal procedure for each one of them.
-fn handle_unsafe_op(unsafe_ops: &Vec<Box<UnsafeOp<'tcx>>>, _body: &Body<'tcx>) {
-    // The Local
+fn handle_unsafe_op(unsafe_ops: &Vec<Box<UnsafeOp<'tcx>>>, body: &Body<'tcx>) {
+    // The Local of Place.
     let mut place_locals = FxHashSet::<Local>::default();
     // Map each BasicBlock to the last unsafe operation in it.
     let mut bb_ops = FxHashMap::<BasicBlock, &UnsafeOp<'tcx>>::default();
@@ -270,8 +309,8 @@ fn handle_unsafe_op(unsafe_ops: &Vec<Box<UnsafeOp<'tcx>>>, _body: &Body<'tcx>) {
 
     // Examine each BB that contains unsafe operation(s).
     for (bb, unsafe_op) in bb_ops {
-        handle_unsafe_op_core(&mut place_locals, &bb, &unsafe_op,
-                              &mut visited, _body, &mut results);
+        handle_unsafe_op_core(&mut place_locals, bb, Some(unsafe_op),
+                              &mut visited, body, &mut results);
     }
 }
 
@@ -298,7 +337,6 @@ pub fn find_unsafe_obj(tcx: TyCtxt<'tcx>, def_id: DefId) {
     }
 
     let mut unsafe_ops = Vec::new();
-    // let mut unsafe_stmts = Vec::new();
     for (bb, data) in body.basic_blocks().iter_enumerated() {
         for (i, stmt) in data.statements.iter().enumerate() {
             if !is_unsafe(body, stmt.source_info.scope) {
