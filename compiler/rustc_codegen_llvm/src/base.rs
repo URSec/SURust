@@ -26,7 +26,7 @@ use rustc_codegen_ssa::traits::*;
 use rustc_codegen_ssa::{ModuleCodegen, ModuleKind};
 use rustc_data_structures::small_c_str::SmallCStr;
 use rustc_metadata::EncodedMetadata;
-use rustc_middle::{dep_graph, mir};
+use rustc_middle::dep_graph;
 use rustc_middle::middle::codegen_fn_attrs::CodegenFnAttrs;
 use rustc_middle::middle::exported_symbols;
 use rustc_middle::mir::mono::{Linkage, Visibility};
@@ -142,11 +142,7 @@ pub fn compile_codegen_unit(
             }
 
             // ... and now that we have everything pre-defined, fill out those definitions.
-            //println!("cgu_name: {:?}", cgu_name);
             for &(mono_item, _) in &mono_items {
-                if let mir::mono::MonoItem::Fn(_instance) = mono_item {
-                    //println!("[module_codegen]: define: {:?}", cx.tcx.opt_item_name(instance.def.def_id()));
-                }
                 mono_item.define::<Builder<'_, '_, '_>>(&cx);
             }
 

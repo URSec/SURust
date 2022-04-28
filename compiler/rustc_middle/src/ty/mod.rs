@@ -1938,7 +1938,6 @@ impl<'tcx> TyCtxt<'tcx> {
                 // `instance_mir`, so we'll assume const fn also wants the optimized version.
                 _ => {
                     assert_eq!(def.const_param_did, None);
-                    //println!("[instance_mir]: Calling optimized_mir for {:?}", self.opt_item_name(instance.def_id()));
                     self.optimized_mir(def.did)
                 }
             },
