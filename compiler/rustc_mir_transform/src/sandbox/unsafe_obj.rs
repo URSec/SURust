@@ -1,9 +1,10 @@
 use rustc_middle::mir::*;
-use rustc_middle::ty::{TyCtxt};
+use rustc_middle::ty::{self, TyCtxt};
 use rustc_hir::def_id::{DefId};
 use rustc_data_structures::fx::{FxHashSet, FxHashMap};
 
 use super::debug::*;
+use super::database::*;
 
 /// An unsafe operation (a statement or a terminator) in an unsafe block/fn.
 struct UnsafeOp <'tcx> {
@@ -148,7 +149,7 @@ fn get_place_in_rvalue(rvalue: &Rvalue<'tcx>, places: &mut Vec<Place<'tcx>>) {
 fn get_place_in_stmt(stmt: &Statement<'tcx>, places: &mut Vec::<Place<'tcx>>) {
     match &stmt.kind {
         StatementKind::Assign(box (place, rvalue)) => {
-            print_stmt_assign(stmt, rvalue);
+            // print_stmt_assign(stmt, rvalue);
             places.push(*place);
             get_place_in_rvalue(rvalue, places);
             // Will the "box ..." syntax creates a new heap object?
@@ -230,9 +231,20 @@ fn get_place_in_copynonoverlap(_stmt: &CopyNonOverlapping<'tcx>,
 
 /// Check if a function is one that allocates a heap object, e.g, Vec::new().
 fn is_heap_alloc(func: &Constant<'tcx>) -> bool {
-    println!("[Callee]: {:?}", func);
+    if let ty::FnDef(def_id, _) = *func.literal.ty().kind() {
+        let name = ty::tls::with(|tcx| {
+            tcx.opt_item_name(def_id).unwrap().name.to_ident_string()});
+        // The name ignors the crate and module and struct and only keeps
+        // the final method, e.g., "new" of "Box::<i32>::new". Perhaps we
+        // should check where a method is from; we would otherwise run the
+        // risk of introducing false positives.
+        if HEAP_ALLOC.contains(&name) {
+            println!("[Heap Alloc]: {:?}", func);
 
-    // TODO: Implement it.
+            return true;
+        }
+    }
+
     false
 }
 
@@ -273,6 +285,7 @@ fn handle_unsafe_op_core(place_locals: &mut FxHashSet<Local>,
             // 1. a heap allocation call such as Vec::new()
             // 2. a non-std-lib fn call that returns a pointer
             // 3. a std-lib fn call that returns a pointer, e.g, p = v.as_ptr()
+            // print_terminator("Call", &bbd.terminator());
             if is_heap_alloc(f) {
                 results.push(UnsafeAllocSite::Alloc(bbd.terminator()));
             } else {

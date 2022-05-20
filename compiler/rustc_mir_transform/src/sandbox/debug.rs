@@ -73,6 +73,8 @@ crate fn print_stmt_assign(stmt: &Statement<'tcx>, rvalue: &Rvalue<'tcx>) {
     }
 }
 
+#[allow(dead_code)]
+#[inline(always)]
 crate fn print_stmt(type_name: &str, stmt: &Statement<'_>) {
     println!("[{}]: {:?}", type_name, stmt);
 }
