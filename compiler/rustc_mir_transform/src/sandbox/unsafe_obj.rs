@@ -6,6 +6,9 @@ use rustc_data_structures::fx::{FxHashSet, FxHashMap};
 use super::debug::*;
 use super::database::*;
 
+// For debugging purpose.
+static _DEBUG: bool = false;
+
 /// An unsafe operation (a statement or a terminator) in an unsafe block/fn.
 struct UnsafeOp <'tcx> {
     // All Place used in this statement or terminator.
@@ -81,7 +84,7 @@ fn is_builtin_or_std(tcx: TyCtxt<'tcx>, def_id: DefId) -> bool {
 
 /// Get the Place in an Operand.
 #[inline(always)]
-fn get_place_from_operand(operand: &Operand<'tcx>, places: &mut Vec<Place<'tcx>>) {
+fn get_place_in_operand(operand: &Operand<'tcx>, places: &mut Vec<Place<'tcx>>) {
     match operand {
         // Should we ignore temporary values?
         Operand::Copy(place) => {
@@ -98,10 +101,10 @@ fn get_place_from_operand(operand: &Operand<'tcx>, places: &mut Vec<Place<'tcx>>
 fn get_place_in_rvalue(rvalue: &Rvalue<'tcx>, places: &mut Vec<Place<'tcx>>) {
     match rvalue {
         Rvalue::Use(operand) => {
-            get_place_from_operand(operand, places);
+            get_place_in_operand(operand, places);
         },
         Rvalue::Repeat(operand, _num) => {
-           get_place_from_operand(operand, places);
+           get_place_in_operand(operand, places);
         },
         Rvalue::Ref(_, _, place) => {
             places.push(*place);
@@ -117,15 +120,15 @@ fn get_place_in_rvalue(rvalue: &Rvalue<'tcx>, places: &mut Vec<Place<'tcx>>) {
             places.push(*place);
         },
         Rvalue::Cast(_, operand, _) => {
-           get_place_from_operand(operand, places);
+           get_place_in_operand(operand, places);
         },
         Rvalue::BinaryOp(_, box (ref lhs, ref rhs))
         | Rvalue::CheckedBinaryOp(_, box (ref lhs, ref rhs)) => {
-           get_place_from_operand(lhs, places);
-           get_place_from_operand(rhs, places);
+           get_place_in_operand(lhs, places);
+           get_place_in_operand(rhs, places);
         },
         Rvalue::UnaryOp(_, operand) => {
-           get_place_from_operand(operand, places);
+           get_place_in_operand(operand, places);
         },
         Rvalue::Discriminant(place) => {
             places.push(*place);
@@ -135,11 +138,11 @@ fn get_place_in_rvalue(rvalue: &Rvalue<'tcx>, places: &mut Vec<Place<'tcx>>) {
             // single allocation site for the whole aggregate, if that is
             // represented in MIR?
             for operand in operands {
-                get_place_from_operand(operand, places);
+                get_place_in_operand(operand, places);
             }
         },
         Rvalue::ShallowInitBox(operand, _) => {
-            get_place_from_operand(operand, places);
+            get_place_in_operand(operand, places);
         },
         _ => {}
     }
@@ -187,35 +190,44 @@ fn get_place_in_stmt(stmt: &Statement<'tcx>, places: &mut Vec::<Place<'tcx>>) {
 }
 
 /// Extract Place in a Terminator.
-fn get_place_in_terminator(terminator: &Terminator<'tcx>,
+fn get_place_in_terminator(body: &'tcx Body<'tcx>, terminator: &Terminator<'tcx>,
     places: &mut Vec::<Place<'tcx>>) {
     match &terminator.kind {
         TerminatorKind::SwitchInt{discr, ..} => {
             print_terminator("SwitchInt", terminator);
-            get_place_from_operand(discr, places);
+            get_place_in_operand(discr, places);
         },
         TerminatorKind::Drop{place, ..} => {
             places.push(*place);
         },
         TerminatorKind::DropAndReplace{place, value, ..} => {
             places.push(*place);
-            get_place_from_operand(value, places);
+            get_place_in_operand(value, places);
         },
-        TerminatorKind::Call{func: _, args, ..} => {
+        TerminatorKind::Call{func: _, args, destination, ..} => {
             // For some unknown reason(s), sometimes printing a Call in println!
             // will crash the compiler.
-            //
-            // What is the Place in "destination: Option<(Place<'tcx>, BasicBlock)"?
             for arg in args {
-                get_place_from_operand(arg, places);
+                get_place_in_operand(arg, places);
+            }
+            // Extract the Place from the LHS if the call returns something.
+            if let Some((place, _)) = destination {
+                // Ignore fn that returns "()".
+                // TODO? Should we ignore all locals, i.e., those Place whose
+                // projection is empty?
+                if let ty::Tuple(tys) = body.local_decls[place.local].ty.kind() {
+                    if tys.len() != 0 {
+                        places.push(*place);
+                    }
+                }
             }
         },
         TerminatorKind::Assert{cond, ..} => {
             // Do we need to handle assertions?
-            get_place_from_operand(cond, places);
+            get_place_in_operand(cond, places);
         },
         TerminatorKind::Yield{value, resume: _, resume_arg, ..} => {
-            get_place_from_operand(value, places);
+            get_place_in_operand(value, places);
             places.push(*resume_arg);
         },
         _ => {}
@@ -266,9 +278,9 @@ fn handle_unsafe_op_core(place_locals: &mut FxHashSet<Local>,
     // Prevent infinite recursion caused by loops.
     if visited.contains(&bb) {return;}
     visited.insert(bb);
+
     // Has handled all target Place.
     if place_locals.is_empty() {return;}
-
 
     let bbd = &body.basic_blocks()[bb];
     let stmt_num = bbd.statements.len();
@@ -279,21 +291,38 @@ fn handle_unsafe_op_core(place_locals: &mut FxHashSet<Local>,
     let mut stmt_index = location.statement_index;
     if unsafe_op.is_none() || location.statement_index == stmt_num {
         // Examine a terminator.
-        if let TerminatorKind::Call{func: Operand::Constant(f), ..} =
-            &bbd.terminator().kind {
-            // There are three cases:
-            // 1. a heap allocation call such as Vec::new()
-            // 2. a non-std-lib fn call that returns a pointer
-            // 3. a std-lib fn call that returns a pointer, e.g, p = v.as_ptr()
-            // print_terminator("Call", &bbd.terminator());
-            if is_heap_alloc(f) {
-                results.push(UnsafeAllocSite::Alloc(bbd.terminator()));
-            } else {
-                // TODO: Handle case 2 and case 3.
+        if let TerminatorKind::Call{func: Operand::Constant(f), args,
+                                    destination, ..} = &bbd.terminator().kind {
+            if let Some((place, _)) = destination {
+                if _DEBUG { println!("Unsafe Place: {:?}", place_locals); }
+                // There are three cases:
+                // 1. a heap allocation call such as Vec::new()
+                // 2. a non-std-lib fn call that returns a pointer
+                // 3. a std-lib fn call that returns a ptr, e.g, p = v.as_ptr()
+                if place_locals.contains(&place.local) {
+                    // Found a definition site for an unsafe Place.
+                    if is_heap_alloc(f) {
+                        results.push(UnsafeAllocSite::Alloc(bbd.terminator()));
+                    } else {
+                        // Get Place used in args of the call.
+                        let mut place_in_args = Vec::<Place<'tcx>>::new();
+                        args.iter().for_each(
+                            |arg| get_place_in_operand(arg, &mut place_in_args));
+                        // Can the next loop be rewritten in a functional style?
+                        // Cannot use for_each as it requires a Fn that returns '()'.
+                        for place in place_in_args {
+                            place_locals.insert(place.local);
+                        }
+
+                        results.push(UnsafeAllocSite::Ret(bbd.terminator()));
+                        // TODO: We need distinguish the 2nd and 3rd conditions
+                        // because we do not process std libs.
+                    }
+                    place_locals.remove(&destination.unwrap().0.local);
+                }
             }
         }
         stmt_index -= 1;
-        // TODO: Remove related Place in place_locals
     }
 
     // Examine starting from a Statement backward.
@@ -305,6 +334,9 @@ fn handle_unsafe_op_core(place_locals: &mut FxHashSet<Local>,
     // TODO: Recursively traverse backward to the current BB's predecessors.
     // Note that we need pass a clone of place_locals due to branches.
     for pbb in &body.predecessors()[bb] {
+        if _DEBUG {
+            println!("Initial unsafe Place for BB {:?}: {:?}", pbb, place_locals);
+        }
         handle_unsafe_op_core(&mut place_locals.clone(), *pbb, None, visited,
                               body, results);
     }
@@ -335,13 +367,16 @@ fn handle_unsafe_op(unsafe_ops: &Vec<Box<UnsafeOp<'tcx>>>, body: &Body<'tcx>) {
     for (bb, unsafe_op) in bb_ops {
         // Record visited BasicBlock to avoid infinite cycles due to loop.
         let mut visited = FxHashSet::<BasicBlock>::default();
+        if _DEBUG {
+            println!("Initial unsafe Place for BB {:?}: {:?}", bb, place_locals);
+        }
         handle_unsafe_op_core(&mut place_locals, bb, Some(unsafe_op),
                               &mut visited, body, &mut results);
     }
 }
 
 /// Entrance of this module. It finds the definition or declaration site of each
-/// memory object used in unsafe code.
+/// heap memory object used in unsafe code.
 pub fn find_unsafe_obj(tcx: TyCtxt<'tcx>, def_id: DefId) {
     // Filter out uninterested functions.
    if is_builtin_or_std(tcx, def_id) {
@@ -387,7 +422,7 @@ pub fn find_unsafe_obj(tcx: TyCtxt<'tcx>, def_id: DefId) {
         // Handle unsafe terminator.
         let mut unsafe_op = box UnsafeOp {places: Vec::new(),
             location: Location {block: bb, statement_index: data.statements.len()}};
-        get_place_in_terminator(&terminator, &mut unsafe_op.places);
+        get_place_in_terminator(body, &terminator, &mut unsafe_op.places);
         if !unsafe_op.places.is_empty() {
             unsafe_ops.push(unsafe_op);
         }
