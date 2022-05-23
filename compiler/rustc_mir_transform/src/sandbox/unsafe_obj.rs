@@ -324,23 +324,25 @@ fn handle_unsafe_op_core(place_locals: &mut FxHashSet<Local>,
         stmt_index -= 1;
     }
 
-    // Examine each statement in the current BB backward.
-    for i in (0..=stmt_index).rev() {
-        let stmt = &bbd.statements[i];
-        match &stmt.kind {
-            StatementKind::Assign(box (place, rvalue)) => {
-                if place_locals.contains(&place.local) {
-                    // Put the Place in rvalue to the unsafe Place set.
-                    let mut place_in_rvalue = Vec::<Place<'tcx>>::new();
-                    get_place_in_rvalue(&rvalue, &mut place_in_rvalue);
-                    for place in place_in_rvalue {
-                        place_locals.insert(place.local);
+    if stmt_num != 0 {
+        // Examine each statement in the current BB backward.
+        for i in (0..=stmt_index).rev() {
+            let stmt = &bbd.statements[i];
+            match &stmt.kind {
+                StatementKind::Assign(box (place, rvalue)) => {
+                    if place_locals.contains(&place.local) {
+                        // Put the Place in rvalue to the unsafe Place set.
+                        let mut place_in_rvalue = Vec::<Place<'tcx>>::new();
+                        get_place_in_rvalue(&rvalue, &mut place_in_rvalue);
+                        for place in place_in_rvalue {
+                            place_locals.insert(place.local);
+                        }
+                        place_locals.remove(&place.local);
                     }
-                    place_locals.remove(&place.local);
+                },
+                _  => {
+                    // Any other cases to handle?
                 }
-            },
-            _  => {
-                // Any other cases to handle?
             }
         }
     }
