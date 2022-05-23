@@ -152,7 +152,6 @@ fn get_place_in_rvalue(rvalue: &Rvalue<'tcx>, places: &mut Vec<Place<'tcx>>) {
 fn get_place_in_stmt(stmt: &Statement<'tcx>, places: &mut Vec::<Place<'tcx>>) {
     match &stmt.kind {
         StatementKind::Assign(box (place, rvalue)) => {
-            // print_stmt_assign(stmt, rvalue);
             places.push(*place);
             get_place_in_rvalue(rvalue, places);
             // Will the "box ..." syntax creates a new heap object?
@@ -325,13 +324,28 @@ fn handle_unsafe_op_core(place_locals: &mut FxHashSet<Local>,
         stmt_index -= 1;
     }
 
-    // Examine starting from a Statement backward.
+    // Examine each statement in the current BB backward.
     for i in (0..=stmt_index).rev() {
-        // TODO: Examine each statement in the current BB backward.
-        let _stmt = &bbd.statements[i];
+        let stmt = &bbd.statements[i];
+        match &stmt.kind {
+            StatementKind::Assign(box (place, rvalue)) => {
+                if place_locals.contains(&place.local) {
+                    // Put the Place in rvalue to the unsafe Place set.
+                    let mut place_in_rvalue = Vec::<Place<'tcx>>::new();
+                    get_place_in_rvalue(&rvalue, &mut place_in_rvalue);
+                    for place in place_in_rvalue {
+                        place_locals.insert(place.local);
+                    }
+                    place_locals.remove(&place.local);
+                }
+            },
+            _  => {
+                // Any other cases to handle?
+            }
+        }
     }
 
-    // TODO: Recursively traverse backward to the current BB's predecessors.
+    // Recursively traverse backward to the current BB's predecessors.
     // Note that we need pass a clone of place_locals due to branches.
     for pbb in &body.predecessors()[bb] {
         if _DEBUG {
