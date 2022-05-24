@@ -156,11 +156,10 @@ fn get_place_in_stmt(stmt: &Statement<'tcx>, places: &mut Vec::<Place<'tcx>>) {
         },
         StatementKind::FakeRead(box (_cause, _place)) => {
             print_stmt("FakeRead", stmt);
-            // TODO: Handle FakeRead
+            // TODO: Handle FakeRead?
             panic!("Need manually examine this FakeRead");
         },
         StatementKind::SetDiscriminant {box place, ..} => {
-            print_stmt("SetDiscriminant", stmt);
             places.push(*place);
         },
         StatementKind::Retag(_, box place) => {
@@ -169,12 +168,17 @@ fn get_place_in_stmt(stmt: &Statement<'tcx>, places: &mut Vec::<Place<'tcx>>) {
             places.push(*place);
         },
         StatementKind::AscribeUserType(box (place, _), _) => {
+            // What exactly is an AscribeUserType? And the doc says this will
+            // be an nop at execution time; do we need to handle it?
             print_stmt("AscribeUserType", stmt);
             places.push(*place);
         },
-        StatementKind::CopyNonOverlapping(box copy_non_overlap) => {
+        StatementKind::CopyNonOverlapping(box cno) => {
             print_stmt("CopyNonOverlapping", stmt);
-            get_place_in_copynonoverlap(copy_non_overlap, places);
+            get_place_in_operand(&cno.src, places);
+            get_place_in_operand(&cno.dst, places);
+            // Do we really need to record the place of the count arg?
+            get_place_in_operand(&cno.count, places);
         },
         StatementKind::StorageLive(_)
             | StatementKind::StorageDead(_)
@@ -228,13 +232,6 @@ fn get_place_in_terminator(body: &'tcx Body<'tcx>, terminator: &Terminator<'tcx>
         },
         _ => {}
     }
-}
-
-/// Get Place in an CopyNonOverlapping Statement.
-/// We handle it separately as it is more complex than most other Statement.
-fn get_place_in_copynonoverlap(_stmt: &CopyNonOverlapping<'tcx>,
-                               _places: &mut Vec<Place<'tcx>>) {
-    // TODO: Handle CopyNonOverlapping
 }
 
 /// Check if a function is one that allocates a heap object, e.g, Vec::new().
