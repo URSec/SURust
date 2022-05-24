@@ -76,10 +76,7 @@ fn is_builtin_or_std(tcx: TyCtxt<'tcx>, def_id: DefId) -> bool {
     }
 
     let crate_name = tcx.crate_name(def_id.krate).to_ident_string();
-    return crate_name == "core" || crate_name == "std" ||
-           crate_name == "alloc" ||
-           crate_name == "test" ||
-           crate_name == "backtrace";
+    return BUILTIN_LIB.contains(&crate_name);
 }
 
 /// Get the Place in an Operand.

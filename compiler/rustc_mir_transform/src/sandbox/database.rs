@@ -1,5 +1,26 @@
 use rustc_data_structures::fx::{FxHashSet};
 
+// The set of built-in libraries
+lazy_static!{
+    pub static ref BUILTIN_LIB: FxHashSet<String> = {
+        let libs = vec![
+            "core",
+            "std",
+            "stdarch",
+            "alloc",
+            "test",
+            "backtrace",
+            "unwind",
+            "panic_abort", "panic_unwind",
+            "proc_macro",
+            // There are several others in "rust/library". Do we need to
+            // includ3 all of them?
+        ];
+
+        libs.into_iter().map(|x| x.to_string()).collect()
+    };
+}
+
 // A set of heap allocation calls.
 //
 // TODO: The currently list may be incomplete. A thorough study is needed.
