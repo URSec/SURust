@@ -31,7 +31,7 @@ enum UnsafeAllocSite<'tcx> {
     // Returned pointer from a non-heap-alloc function call.
     Ret(&'tcx Terminator<'tcx>),
     // Argument of a function.
-    Arg(Place<'tcx>),
+    Arg(Local),
 }
 
 /// Check if a fn is unsafe, or if a statement/terminator in an unsafe block.
@@ -212,14 +212,13 @@ fn get_place_in_terminator(body: &'tcx Body<'tcx>, terminator: &Terminator<'tcx>
             }
             // Extract the Place from the LHS if the call returns something.
             if let Some((place, _)) = destination {
-                // Ignore fn that returns "()".
                 // TODO? Should we ignore all locals, i.e., those Place whose
                 // projection is empty?
                 if let ty::Tuple(tys) = body.local_decls[place.local].ty.kind() {
-                    if tys.len() != 0 {
-                        places.push(*place);
-                    }
+                    // Ignore returns type of "()".
+                    if tys.len() == 0 { return; }
                 }
+                places.push(*place);
             }
         },
         TerminatorKind::Assert{cond, ..} => {
@@ -259,6 +258,7 @@ fn is_heap_alloc(func: &Constant<'tcx>) -> bool {
 /// @place_locals: The Local of all the Place used directly or indirectly (e.g.,
 ///                by assignment) by unsafe code.
 /// @bb: The currently processed BasicBlock.
+/// @unsafe_op: The last unsafe operation in a BB, or None.
 /// @visited: Already processed BasicBlock.
 /// @op: The last unsafe Operation in an unsafe BB or the last Operation in other BB.
 /// @body: The function body of the current BB.
@@ -287,7 +287,7 @@ fn handle_unsafe_op_core(place_locals: &mut FxHashSet<Local>,
         if let TerminatorKind::Call{func: Operand::Constant(f), args,
                                     destination, ..} = &bbd.terminator().kind {
             if let Some((place, _)) = destination {
-                if _DEBUG { println!("Unsafe Place: {:?}", place_locals); }
+                // if _DEBUG { println!("Unsafe Place: {:?}", place_locals); }
                 // There are three cases:
                 // 1. a heap allocation call such as Vec::new()
                 // 2. a non-std-lib fn call that returns a pointer
@@ -350,6 +350,17 @@ fn handle_unsafe_op_core(place_locals: &mut FxHashSet<Local>,
         handle_unsafe_op_core(&mut place_locals.clone(), *pbb, None, visited,
                               body, results);
     }
+
+    // After examing the entry BB, check if there are any unsafe Place from
+    // the function's arguments.
+    if bb.index() == 0  && !place_locals.is_empty() {
+       for arg in body.args_iter() {
+           if place_locals.contains(&arg) {
+               results.push(UnsafeAllocSite::Arg(arg));
+               place_locals.remove(&arg);
+           }
+       }
+    }
 }
 
 /// Entrance of the unsafe operation (statement/terminator) analysis function.
@@ -378,11 +389,12 @@ fn handle_unsafe_op(unsafe_ops: &Vec<Box<UnsafeOp<'tcx>>>, body: &Body<'tcx>) {
         // Record visited BasicBlock to avoid infinite cycles due to loop.
         let mut visited = FxHashSet::<BasicBlock>::default();
         if _DEBUG {
-            println!("Initial unsafe Place for BB {:?}: {:?}", bb, place_locals);
+            println!("[handle_unsafe_op]: Initial unsafe Place for BB {:?}: {:?}", bb, place_locals);
         }
         handle_unsafe_op_core(&mut place_locals, bb, Some(unsafe_op),
                               &mut visited, body, &mut results);
     }
+
 }
 
 /// Entrance of this module. It finds the definition or declaration site of each
@@ -400,13 +412,14 @@ pub fn find_unsafe_obj(tcx: TyCtxt<'tcx>, def_id: DefId) {
     }
 
     // Start of the computation.
-    println!("[find_unsafe_obj]: Processing {:?}", name);
+    println!("[find_unsafe_obj]: Processing function {}", name.unwrap().name);
     let body = tcx.optimized_mir(def_id);
 
     if is_unsafe(body, SourceInfo::outermost(body.span).scope) {
         // TODO: Process an unsafe function.
     }
 
+    // Collect operations in unsafe blocks.
     let mut unsafe_ops = Vec::new();  // Unsafe statement/terminator.
     for (bb, data) in body.basic_blocks().iter_enumerated() {
         for (i, stmt) in data.statements.iter().enumerate() {
@@ -414,13 +427,16 @@ pub fn find_unsafe_obj(tcx: TyCtxt<'tcx>, def_id: DefId) {
                 continue;
             }
 
-            // Handle unsafe Statement.
+            // Collect unsafe Statement.
             let mut unsafe_op = box UnsafeOp {places: Vec::new(),
                 // stmt: Some(stmt), terminator: None,
                 location: Location {block: bb, statement_index: i}};
             get_place_in_stmt(&stmt, &mut unsafe_op.places);
             if !unsafe_op.places.is_empty() {
                 unsafe_ops.push(unsafe_op);
+            }
+            if _DEBUG {
+                println!("Unsafe Statement: {:?}", stmt);
             }
         }
 
@@ -429,18 +445,22 @@ pub fn find_unsafe_obj(tcx: TyCtxt<'tcx>, def_id: DefId) {
             continue;
         }
 
-        // Handle unsafe terminator.
+        // Collect unsafe terminator.
         let mut unsafe_op = box UnsafeOp {places: Vec::new(),
             location: Location {block: bb, statement_index: data.statements.len()}};
         get_place_in_terminator(body, &terminator, &mut unsafe_op.places);
         if !unsafe_op.places.is_empty() {
             unsafe_ops.push(unsafe_op);
         }
+        if _DEBUG {
+            println!("Unsafe Terminator: {:?}", terminator);
+        }
     }
 
     if !unsafe_ops.is_empty() {
-        handle_unsafe_op(&unsafe_ops, body);
-
         println!("Found {} unsafe statements/terminators", unsafe_ops.len());
+
+        handle_unsafe_op(&unsafe_ops, body);
+        println!("");
     }
 }
