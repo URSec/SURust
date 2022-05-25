@@ -342,13 +342,18 @@ fn handle_unsafe_op_core(place_locals: &mut FxHashSet<Local>,
     }
 
     // Recursively traverse backward to the current BB's predecessors.
-    // Note that we need pass a clone of place_locals due to branches.
+    let pbb_num = body.predecessors()[bb].len();
     for pbb in &body.predecessors()[bb] {
         if _DEBUG {
             println!("Initial unsafe Place for BB {:?}: {:?}", pbb, place_locals);
         }
-        handle_unsafe_op_core(&mut place_locals.clone(), *pbb, None, visited,
-                              body, results);
+        if pbb_num > 1 {
+            // Pass a clone of place_locals in case of branches.
+            handle_unsafe_op_core(&mut place_locals.clone(), *pbb, None, visited,
+                                  body, results);
+        } else {
+            handle_unsafe_op_core(place_locals, *pbb, None, visited, body, results);
+        }
     }
 
     // After examing the entry BB, check if there are any unsafe Place from
