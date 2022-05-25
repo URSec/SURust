@@ -25,7 +25,7 @@ enum Operation <'tcx> {
 }
 
 #[allow(dead_code)]
-enum UnsafeAllocSite<'tcx> {
+crate enum UnsafeAllocSite<'tcx> {
     // A heap allocation call, such as Vec::new() or Box::new().
     Alloc(&'tcx Terminator<'tcx>),
     // Returned pointer from a non-heap-alloc function call.
@@ -243,13 +243,44 @@ fn is_heap_alloc(func: &Constant<'tcx>) -> bool {
         // should check where a method is from; we would otherwise run the
         // risk of introducing false positives.
         if HEAP_ALLOC.contains(&name) {
-            println!("[Heap Alloc]: {:?}", func);
-
+            if _DEBUG { println!("[Heap Alloc]: {:?}", func); }
             return true;
         }
     }
 
     false
+}
+
+/// Collect unsafe allocation sites of an unsafe function.  It does not need to
+/// analyze the data flow of the function. Instead, it only needs to collect all
+/// fn arguments and return values of function calls.
+///
+/// Inputs:
+/// @body: The boyd of the target function.
+/// @results: The result vector of all unsafe allocation sites.
+fn collect_unsafe_alloc_fn(body: &'tcx Body<'tcx>,
+                           results: &mut Vec::<UnsafeAllocSite<'tcx>>) {
+    for arg in body.args_iter() {
+        results.push(UnsafeAllocSite::Arg(arg));
+    }
+
+    for (_, data) in body.basic_blocks().iter_enumerated() {
+        match &data.terminator().kind {
+            TerminatorKind::Call{func: Operand::Constant(f), args: _,
+            destination, ..} => {
+                if destination.is_some() {
+                    if is_heap_alloc(f) {
+                        // Heap allocation call.
+                        results.push(UnsafeAllocSite::Alloc(data.terminator()));
+                    } else {
+                        // Regular call that returns something.
+                        results.push(UnsafeAllocSite::Ret(data.terminator()));
+                    }
+                }
+            },
+            _ => {}
+        }
+    }
 }
 
 /// Core procedure of the finding the allocation sites of unsafe objects.
@@ -417,15 +448,23 @@ pub fn find_unsafe_obj(tcx: TyCtxt<'tcx>, def_id: DefId) {
     }
 
     // Start of the computation.
-    println!("[find_unsafe_obj]: Processing function {}", name.unwrap().name);
+    print!("[find_unsafe_obj]: Processing function {}", name.unwrap().name);
     let body = tcx.optimized_mir(def_id);
-
-    if is_unsafe(body, SourceInfo::outermost(body.span).scope) {
-        // TODO: Process an unsafe function.
-    }
 
     // Collect operations in unsafe blocks.
     let mut unsafe_ops = Vec::new();  // Unsafe statement/terminator.
+
+    let mut results = Vec::<UnsafeAllocSite<'tcx>>::new();
+    // Process an unsafe function.
+    if is_unsafe(body, SourceInfo::outermost(body.span).scope) {
+        println!(" (an unsafe function)");
+        collect_unsafe_alloc_fn(&body, &mut results);
+
+        print_unsafe_alloc(&results);
+        return;
+    }
+    println!("");
+
     for (bb, data) in body.basic_blocks().iter_enumerated() {
         for (i, stmt) in data.statements.iter().enumerate() {
             if !is_unsafe(body, stmt.source_info.scope) {
