@@ -436,7 +436,7 @@ fn collect_items_rec<'tcx>(
             //
             // TODO: Write the collected data to a file for later summary-based
             // inter-procedural analysis.
-            let _ = unsafe_obj::find_unsafe_obj(tcx, instance.def.def_id());
+            let _ = unsafe_obj::find_unsafe_alloc(tcx, instance.def.def_id());
         }
         MonoItem::GlobalAsm(item_id) => {
             recursion_depth_reset = None;
