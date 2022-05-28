@@ -2,6 +2,8 @@ use crate::mir::interpret::Scalar;
 use crate::ty::{self, Ty, TyCtxt};
 use rustc_ast::{InlineAsmOptions, InlineAsmTemplatePiece};
 use smallvec::{smallvec, SmallVec};
+use std::hash::Hash;
+use std::hash::Hasher;
 
 use super::{
     AssertMessage, BasicBlock, InlineAsmOperand, Operand, Place, SourceInfo, Successors,
@@ -586,5 +588,19 @@ impl<'tcx> TerminatorKind<'tcx> {
             InlineAsm { destination: Some(_), .. } => vec!["".into()],
             InlineAsm { destination: None, .. } => vec![],
         }
+    }
+}
+
+impl<'tcx> PartialEq for Terminator<'tcx> {
+    fn eq(&self, other: &Self) -> bool {
+        self.source_info == other.source_info
+    }
+}
+
+impl<'tcx> Eq for Terminator<'tcx> {}
+
+impl<'tcx> Hash for Terminator<'tcx> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.source_info.hash(state);
     }
 }
