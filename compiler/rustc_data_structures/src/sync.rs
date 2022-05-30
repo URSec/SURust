@@ -224,6 +224,11 @@ cfg_if! {
             }
 
             #[inline(always)]
+            pub fn get_ref(&self) -> &T {
+                &self.0
+            }
+
+            #[inline(always)]
             pub fn get_mut(&mut self) -> &mut T {
                 &mut self.0
             }

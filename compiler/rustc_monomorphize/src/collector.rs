@@ -317,8 +317,21 @@ pub fn collect_crate_mono_items(
         });
     }
 
-    // Sandboxing?
-    // TODO?: Summarizing unsafe obj related info for the current crate?
+    // Sandbox unsafe Rust
+    // Collect the definition/declaration sites of unsafe objects.
+    //
+    // TODO:
+    // 1. Summarize needed information of each function.
+    // 2. Write the summarized data to a file for later summary-based
+    // inter-procedural analysis.
+    for item in visited.get_ref() {
+        match item {
+            MonoItem::Fn(instance) => {
+                unsafe_obj::find_unsafe_alloc(tcx, instance.def_id());
+            },
+            _ => {}
+        }
+    }
 
     (visited.into_inner(), inlining_map.into_inner())
 }
@@ -429,14 +442,6 @@ fn collect_items_rec<'tcx>(
             rustc_data_structures::stack::ensure_sufficient_stack(|| {
                 collect_neighbours(tcx, instance, &mut neighbors);
             });
-
-            // Sandboxing unsafe Rust
-            // Collect the definitions or declarations of unsafe objects.
-            // Question: Is this the best place to insert this call?
-            //
-            // TODO: Write the collected data to a file for later summary-based
-            // inter-procedural analysis.
-            let _ = unsafe_obj::find_unsafe_alloc(tcx, instance.def.def_id());
         }
         MonoItem::GlobalAsm(item_id) => {
             recursion_depth_reset = None;
