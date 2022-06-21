@@ -207,7 +207,7 @@ use std::ops::Range;
 use std::path::PathBuf;
 
 // Sandboxing
-use rustc_mir_transform::sandbox::unsafe_obj;
+use rustc_mir_transform::sandbox::*;
 
 #[derive(PartialEq)]
 pub enum MonoItemCollectionMode {
@@ -318,20 +318,32 @@ pub fn collect_crate_mono_items(
     }
 
     // Sandbox unsafe Rust
-    // Collect the definition/declaration sites of unsafe objects.
     //
     // TODO:
     // 1. Summarize needed information of each function.
     // 2. Write the summarized data to a file for later summary-based
     // inter-procedural analysis.
+    let mut summaries = Vec::<summarize_fn::Summary>::new();
+    // rustc actually only keeps one copy of MIR for all the MonoItem that are
+    // from the same function with generic type parameter(s).
+    let mut processed = FxHashSet::default();
     for item in visited.get_ref() {
         match item {
             MonoItem::Fn(instance) => {
-                unsafe_obj::find_unsafe_alloc(tcx, instance.def_id());
+                let def_id = instance.def_id();
+                if !processed.contains(&def_id.index) {
+                    summarize_fn::summarize(tcx, def_id, &mut summaries);
+                    processed.insert(def_id.index);
+                }
             },
             _ => {}
         }
     }
+
+    // println!("Summary: {:?}", summaries);
+    let serialized = serde_json::to_string(&summaries);
+    // println!("Serialized Summaries: {:?}", serialized);
+    let _deserialized = serde_json::from_str::<summarize_fn::Summary>(&serialized.unwrap());
 
     (visited.into_inner(), inlining_map.into_inner())
 }

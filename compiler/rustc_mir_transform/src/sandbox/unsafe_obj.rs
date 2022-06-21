@@ -57,7 +57,6 @@ impl<'tcx> PartialEq for UnsafeAllocSite<'tcx> {
 }
 
 /// Check if a fn is unsafe, or if a statement/terminator in an unsafe block.
-#[allow(dead_code)]
 fn is_unsafe(body: &Body<'tcx>, scope: SourceScope) -> bool {
     match body.source_scopes[scope].local_data.as_ref() {
         ClearCrossCrate::Clear => false,
@@ -71,15 +70,20 @@ fn is_unsafe(body: &Body<'tcx>, scope: SourceScope) -> bool {
     }
 }
 
-/// A helper function that filters out uninterested functions. This is for
-/// developement and debug only.
+/// A helper function that filters out uninterested functions.
 #[allow(dead_code)]
-fn ignore_fn(tcx: TyCtxt<'tcx>, def_id: DefId) -> bool {
+crate fn ignore_fn(tcx: TyCtxt<'tcx>, def_id: DefId) -> bool {
+    if is_builtin_or_std(tcx, def_id) {
+        return true;
+    }
+
     let name = tcx.opt_item_name(def_id);
     if name.is_none() {
         return true;
     }
+
     let name = name.unwrap().name;
+    // The second condition is for debugging and development only.
     if name.is_empty() || !FN_TO_PROCESS.contains(&name.to_ident_string()) {
         return true;
     }
@@ -506,22 +510,18 @@ fn find_unsafe_alloc_fn(body: &Body<'tcx>) {
 }
 
 /// Entrance of this module.
+#[allow(dead_code)]
 pub fn find_unsafe_alloc(tcx: TyCtxt<'tcx>, def_id: DefId) {
     // Filter out uninterested functions.
-   if is_builtin_or_std(tcx, def_id) {
-       return;
-   }
-
-    let name = tcx.opt_item_name(def_id);
-    if name.is_none() || ignore_fn(tcx, def_id) {
+    if ignore_fn(tcx, def_id) {
         // Filter uninterested functions for fast development purpose.
         return;
     }
 
     // Start of the computation.
-    print!("[find_unsafe_alloc]: Processing function {}", name.unwrap().name);
+    let name = tcx.opt_item_name(def_id);
+    print!("[find_unsafe_alloc]: Processing function {} ({:?})", name.unwrap(), def_id);
     let body = tcx.optimized_mir(def_id);
-
     let mut results = FxHashSet::<UnsafeAllocSite<'tcx>>::default();
     // Process an unsafe function.
     if is_unsafe(body, SourceInfo::outermost(body.span).scope) {

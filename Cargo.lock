@@ -4226,6 +4226,8 @@ dependencies = [
  "rustc_span",
  "rustc_target",
  "rustc_trait_selection",
+ "serde",
+ "serde_json",
  "smallvec",
  "tracing",
 ]
@@ -4243,6 +4245,7 @@ dependencies = [
  "rustc_session",
  "rustc_span",
  "rustc_target",
+ "serde_json",
  "smallvec",
  "tracing",
 ]
