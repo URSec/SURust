@@ -34,7 +34,7 @@ enum AllocSite {
 #[derive(Serialize, Deserialize)]
 struct Callee {
     /// DefId {DefIndex, CrateNum}
-    callee_id: (u32, u32),
+    id: (u32, u32),
     /// The locations of the allocation site for each argument. For example,
     /// [[l0, l1], [l2, _2]] means the caller has two arguments, and the first
     /// argument is computed from Terminator l0 and l1, and the second is from
@@ -55,10 +55,20 @@ pub struct Summary {
     ret: Option<Vec<AllocSite>>
 }
 
+impl fmt::Debug for Callee {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // TODO? Print out arguments' allocation sites.
+        write!(f, "ID: {:?}", self.id)
+    }
+}
+
 impl fmt::Debug for Summary {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // TODO: Extract the callee and ret information of a Summary.
-        write!(f, "{} (id: {})", self.fn_name, self.fn_id)
+        let mut callees = &Vec::new();
+        if self.callees.is_some() {
+            callees = self.callees.as_ref().unwrap();
+        }
+        write!(f, "{} (id: {}): Callees: {:?}", self.fn_name, self.fn_id, callees)
     }
 }
 
