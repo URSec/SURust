@@ -8,6 +8,7 @@ use rustc_data_structures::fx::{FxHashSet, FxHashMap};
 
 use super::debug::*;
 use super::database::*;
+use super::lib::*;
 
 // For debugging purpose.
 static _DEBUG: bool = false;
@@ -70,109 +71,8 @@ fn is_unsafe(body: &Body<'tcx>, scope: SourceScope) -> bool {
     }
 }
 
-/// A helper function that filters out uninterested functions.
-#[allow(dead_code)]
-crate fn ignore_fn(tcx: TyCtxt<'tcx>, def_id: DefId) -> bool {
-    if is_builtin_or_std(tcx, def_id) {
-        return true;
-    }
-
-    let name = tcx.opt_item_name(def_id);
-    if name.is_none() {
-        return true;
-    }
-
-    let name = name.unwrap().name;
-    // The second condition is for debugging and development only.
-    if name.is_empty() || !FN_TO_PROCESS.contains(&name.to_ident_string()) {
-        return true;
-    }
-
-    return false;
-}
-
-/// Checks if a fn is a compiler builtin or from the native libraries such as
-/// std in the "rust/library" directory.
-///
-/// Question: Do we need exclude all the crates in "rust/library"?
-#[inline(always)]
-fn is_builtin_or_std(tcx: TyCtxt<'tcx>, def_id: DefId) -> bool {
-    if tcx.is_compiler_builtins(def_id.krate) {
-        return true;
-    }
-
-    let crate_name = tcx.crate_name(def_id.krate).to_ident_string();
-    return BUILTIN_LIB.contains(&crate_name);
-}
-
-/// Get the Place in an Operand.
-#[inline(always)]
-fn get_place_in_operand(operand: &Operand<'tcx>, places: &mut Vec<Place<'tcx>>) {
-    match operand {
-        // Should we ignore temporary values?
-        Operand::Copy(place) => {
-            places.push(*place);
-        },
-        Operand::Move(place) => {
-            places.push(*place);
-        },
-        Operand::Constant(_) => {}
-    }
-}
-
-/// Get the Place(s) in a Rvalue.
-fn get_place_in_rvalue(rvalue: &Rvalue<'tcx>, places: &mut Vec<Place<'tcx>>) {
-    match rvalue {
-        Rvalue::Use(operand) => {
-            get_place_in_operand(operand, places);
-        },
-        Rvalue::Repeat(operand, _num) => {
-           get_place_in_operand(operand, places);
-        },
-        Rvalue::Ref(_, _, place) => {
-            places.push(*place);
-        },
-        Rvalue::ThreadLocalRef(_def_id) => {
-            // TODO: How to deal with this?
-            panic!("Unhandled Rvalue::ThreadLocalRef");
-        },
-        Rvalue::AddressOf(_, place) => {
-            places.push(*place);
-        },
-        Rvalue::Len(place) => {
-            places.push(*place);
-        },
-        Rvalue::Cast(_, operand, _) => {
-           get_place_in_operand(operand, places);
-        },
-        Rvalue::BinaryOp(_, box (ref lhs, ref rhs))
-        | Rvalue::CheckedBinaryOp(_, box (ref lhs, ref rhs)) => {
-           get_place_in_operand(lhs, places);
-           get_place_in_operand(rhs, places);
-        },
-        Rvalue::UnaryOp(_, operand) => {
-           get_place_in_operand(operand, places);
-        },
-        Rvalue::Discriminant(place) => {
-            places.push(*place);
-        },
-        Rvalue::Aggregate(_, operands) => {
-            // Do we need to collect each field? Or should we just find out the
-            // single allocation site for the whole aggregate, if that is
-            // represented in MIR?
-            for operand in operands {
-                get_place_in_operand(operand, places);
-            }
-        },
-        Rvalue::ShallowInitBox(operand, _) => {
-            get_place_in_operand(operand, places);
-        },
-        _ => {}
-    }
-}
-
 /// Extract Place in a Statement.
-fn get_place_in_stmt(stmt: &Statement<'tcx>, places: &mut Vec::<Place<'tcx>>) {
+crate fn get_place_in_stmt(stmt: &Statement<'tcx>, places: &mut Vec::<Place<'tcx>>) {
     match &stmt.kind {
         StatementKind::Assign(box (place, rvalue)) => {
             places.push(*place);
@@ -513,7 +413,7 @@ fn find_unsafe_alloc_fn(body: &Body<'tcx>) {
 #[allow(dead_code)]
 pub fn find_unsafe_alloc(tcx: TyCtxt<'tcx>, def_id: DefId) {
     // Filter out uninterested functions.
-    if ignore_fn(tcx, def_id) {
+    if ignore_fn_dev(tcx, def_id) {
         // Filter uninterested functions for fast development purpose.
         return;
     }

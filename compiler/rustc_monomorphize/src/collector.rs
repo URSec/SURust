@@ -344,9 +344,10 @@ pub fn collect_crate_mono_items(
     for summary in &summaries {
         println!("{:?}", summary);
     }
-    let serialized = serde_json::to_string(&summaries);
-    // println!("Serialized Summaries: {:?}", serialized);
-    let _deserialized = serde_json::from_str::<summarize_fn::Summary>(&serialized.unwrap());
+    let serialized = serde_json::to_string(&summaries).unwrap();
+    // println!("\nSerialized Summaries: {:?}", serialized);
+    let _deserialized = serde_json::from_str::<Vec<summarize_fn::Summary>>(&serialized);
+    // println!("Summaries:\n{:?}", _deserialized.unwrap());
 
     (visited.into_inner(), inlining_map.into_inner())
 }

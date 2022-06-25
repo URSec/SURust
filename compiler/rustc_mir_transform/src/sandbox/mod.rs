@@ -8,6 +8,7 @@
 //! and do a summary-based inter-procedural analysis to propagate the use of
 //! unsafe objects (taint propagation) based on what we get from step 1.
 
+pub mod lib;
 pub mod unsafe_obj;
 pub mod summarize_fn;
 crate mod debug;
