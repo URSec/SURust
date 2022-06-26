@@ -52,7 +52,7 @@ struct Callee {
     /// [[l0, l1], [l2, _2]] means the caller has two arguments, and the first
     /// argument is computed from Terminator l0 and l1, and the second is from
     /// Terminator l2 and local _2 (an argument or local var).
-    arg_def_sites: Option<Vec<FxHashSet<DefSite>>>,
+    arg_def_sites: Vec<FxHashSet<DefSite>>,
 }
 
 /// Summary of a function.
@@ -63,9 +63,9 @@ pub struct Summary {
     /// DefIndex
     fn_id: u32,
     /// Callees used in this function. Key is DefId.
-    callees: Option<Vec<Callee>>,
+    callees: Vec<Callee>,
     /// Return value
-    ret: Option<Vec<DefSite>>
+    ret: Vec<DefSite>
 }
 
 impl fmt::Debug for Callee {
@@ -77,10 +77,8 @@ impl fmt::Debug for Callee {
 
 impl fmt::Debug for Summary {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut callees = &Vec::new();
-        if self.callees.is_some() {
-            callees = self.callees.as_ref().unwrap();
-        }
+        let callees = &self.callees;
+        // TODO: Add Summary.ret.
         write!(f, "{} (id: {}): Callees: {:?}", self.fn_name, self.fn_id, callees)
     }
 }
@@ -112,19 +110,19 @@ fn get_callee(callees: &mut Vec<Callee>, def_id: DefId) -> &mut Callee {
 /// @summary: Summary.
 fn update_callee_arg_def_sites(def_id: DefId, index: usize, site: DefSite,
                                summary: &mut Summary) {
-    let callee = get_callee(summary.callees.as_mut().unwrap(), def_id);
+    let callee = get_callee(&mut summary.callees, def_id);
     // We use get_mut() instead of a simple [] to handle one corner case where
     // a variadic callee is called more than once with different number of
     // arguments AND during the init of Callee in analyze_fn(), the fewer-arg
     // call is processed before the more-arg call(s). In this case,
     // callee.arg_def_sites.len() would be smaller than index.  We expand the
     // arg_def_sites dynamically to solve this problem.
-    match callee.arg_def_sites.as_mut().unwrap().get_mut(index) {
+    match callee.arg_def_sites.get_mut(index) {
         Some(sites) => { sites.insert(site); },
         None => {
             let mut sites = FxHashSet::default();
             sites.insert(site);
-            callee.arg_def_sites.as_mut().unwrap().push(sites);
+            callee.arg_def_sites.push(sites);
         }
     }
 }
@@ -233,19 +231,16 @@ fn analyze_fn(body: &Body<'tcx>, summary: &mut Summary) {
         if let TerminatorKind::Call{func: Operand::Constant(f), args, ..} =
             &terminator.kind {
             bb_with_calls.push(bb);
-            if summary.callees.is_none() {
-                summary.callees = Some(Vec::new());
-            }
             let def_id = get_fn_def_id(f);
             if !recorded.contains(&def_id) {
                 recorded.insert(def_id);
-                let arg_def_sites = if args.is_empty() { None } else {
-                    let mut arg_def_sites = Vec::with_capacity(args.len());
+                let mut arg_def_sites = Vec::with_capacity(args.len());
+                if !args.is_empty() {
                     for _ in 0..args.len() {
                         arg_def_sites.push(FxHashSet::default());
                     }
-                    Some(arg_def_sites) };
-                summary.callees.as_mut().unwrap().push(Callee {
+                }
+                summary.callees.push(Callee {
                     name: get_fn_name(f),
                     id: break_def_id(def_id),
                     arg_def_sites: arg_def_sites
@@ -284,7 +279,7 @@ fn analyze_fn(body: &Body<'tcx>, summary: &mut Summary) {
 /// Entrance of this module.
 pub fn summarize(tcx: TyCtxt<'tcx>, def_id: DefId, summaries: &mut Vec::<Summary>) {
     // Filter out uninterested functions.
-    if ignore_fn_dev(tcx, def_id) { return; }
+    if ignore_fn(tcx, def_id) { return; }
 
     let name = tcx.opt_item_name(def_id);
 
@@ -292,8 +287,8 @@ pub fn summarize(tcx: TyCtxt<'tcx>, def_id: DefId, summaries: &mut Vec::<Summary
     let mut summary = Summary {
         fn_name:  name.unwrap().name.to_ident_string(),
         fn_id: def_id.index.as_u32(),
-        callees: None,
-        ret: None,
+        callees: Vec::new(),
+        ret: Vec::new(),
     };
 
     println!("[summarize_fn]: Processing function {}::{}",
