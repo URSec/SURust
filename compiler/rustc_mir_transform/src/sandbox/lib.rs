@@ -12,6 +12,14 @@ crate fn get_crate_name(tcx: TyCtxt<'tcx>, def_id: DefId) -> String {
     return tcx.crate_name(def_id.krate).to_ident_string();
 }
 
+#[inline(always)]
+#[allow(dead_code)]
+crate fn get_fn_name(f: &Constant<'tcx>) -> String {
+    ty::tls::with(|tcx| {
+        return tcx.opt_item_name(get_fn_def_id(f)).unwrap().name.to_string();
+    })
+}
+
 /// A helper function that filters out uninterested functions.
 #[allow(dead_code)]
 crate fn ignore_fn_dev(tcx: TyCtxt<'tcx>, def_id: DefId) -> bool {

@@ -11,7 +11,7 @@ use std::fmt;
 
 use super::lib::*;
 
-/// Allocation site of a Place can be one of the following cases:
+/// Definition site of a Place can be one of the following cases:
 /// 1. Global variable
 /// 2. Local variable on the stack
 /// 3. Return value of call, including heap allocation and other function call
@@ -20,7 +20,7 @@ use super::lib::*;
 /// Currently we only aim to isolate unsafe heap memory, so we only handle
 /// case 3 and 4.
 #[derive(Hash, Eq, Serialize, Deserialize)]
-enum AllocSite {
+enum DefSite {
     /// Location of a terminator.
     /// Since it will always be a Terminator, can we just use a BasicBlock?
     LocBB(u32),
@@ -28,31 +28,31 @@ enum AllocSite {
     Arg(u32),
 }
 
-impl PartialEq for AllocSite {
-    fn eq(&self, other: &AllocSite) -> bool {
+impl PartialEq for DefSite {
+    fn eq(&self, other: &DefSite) -> bool {
         match (self, other) {
-            (AllocSite::LocBB(loc_bb), AllocSite::LocBB(loc_bb1)) =>
+            (DefSite::LocBB(loc_bb), DefSite::LocBB(loc_bb1)) =>
                 loc_bb == loc_bb1,
-            (AllocSite::Arg(arg), AllocSite::Arg(arg1)) => arg == arg1,
+            (DefSite::Arg(arg), DefSite::Arg(arg1)) => arg == arg1,
             _ => false
         }
     }
 }
 
 /// Information of a callee used by a function. Speficially, we collect the
-/// allocation sites for all the arguments of a callee. Note that we do not
-/// need to distinguish each call to the same callee.
+/// allocation/declaration sites for all the arguments of a callee. Note that
+/// we do not need to distinguish each call to the same callee.
 #[derive(Serialize, Deserialize)]
 struct Callee {
     /// Callee name
     name: String,
     /// DefId {DefIndex, CrateNum}
     id: (u32, u32),
-    /// The locations of the allocation site for each argument. For example,
+    /// The locations of the definition site for each argument. For example,
     /// [[l0, l1], [l2, _2]] means the caller has two arguments, and the first
     /// argument is computed from Terminator l0 and l1, and the second is from
     /// Terminator l2 and local _2 (an argument or local var).
-    arg_alloc_sites: Option<Vec<FxHashSet<AllocSite>>>,
+    arg_def_sites: Option<Vec<FxHashSet<DefSite>>>,
 }
 
 /// Summary of a function.
@@ -65,12 +65,12 @@ pub struct Summary {
     /// Callees used in this function. Key is DefId.
     callees: Option<Vec<Callee>>,
     /// Return value
-    ret: Option<Vec<AllocSite>>
+    ret: Option<Vec<DefSite>>
 }
 
 impl fmt::Debug for Callee {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // TODO? Print out arguments' allocation sites.
+        // TODO? Print out arguments' definition sites.
         write!(f, "{} (ID:{:?}", self.name, self.id)
     }
 }
@@ -103,6 +103,32 @@ fn get_callee(callees: &mut Vec<Callee>, def_id: DefId) -> &mut Callee {
     panic!("Cannot find a callee");
 }
 
+/// Update Callee.arg_def_sites with a new DefSite.
+///
+/// Inputs:
+/// @def_id: DefId of the target callee.
+/// @index: Index of the argument in Callee.arg_def_sites.
+/// @site: A new DefSite
+/// @summary: Summary.
+fn update_callee_arg_def_sites(def_id: DefId, index: usize, site: DefSite,
+                               summary: &mut Summary) {
+    let callee = get_callee(summary.callees.as_mut().unwrap(), def_id);
+    // We use get_mut() instead of a simple [] to handle one corner case where
+    // a variadic callee is called more than once with different number of
+    // arguments AND during the init of Callee in analyze_fn(), the fewer-arg
+    // call is processed before the more-arg call(s). In this case,
+    // callee.arg_def_sites.len() would be smaller than index.  We expand the
+    // arg_def_sites dynamically to solve this problem.
+    match callee.arg_def_sites.as_mut().unwrap().get_mut(index) {
+        Some(sites) => { sites.insert(site); },
+        None => {
+            let mut sites = FxHashSet::default();
+            sites.insert(site);
+            callee.arg_def_sites.as_mut().unwrap().push(sites);
+        }
+    }
+}
+
 /// Core procedure of finding allocation/declaration sites of each argument
 /// of a function call. It first examines a basic block backwards, and then
 /// recursively examines the BB's predecessors. It is similar to
@@ -126,7 +152,7 @@ fn analyze_fn_core(bb: BasicBlock, body: &Body<'tcx>, callee_def_id: DefId,
     if let TerminatorKind::Call{func: Operand::Constant(_f), args, destination,
         ..} = &bbd.terminator().kind {
         if let Some(local) = get_ret_local(destination, body) {
-            // Found an allocation site from a function call.
+            // Found a definition site from a function call.
             for i in 0..locals.len() {
                 let arg_locals = &mut locals[i];
                 if arg_locals.contains(&local) {
@@ -137,9 +163,8 @@ fn analyze_fn_core(bb: BasicBlock, body: &Body<'tcx>, callee_def_id: DefId,
                     for place in places_in_args {
                         arg_locals.insert(place.local);
                     }
-                    get_callee(summary.callees.as_mut().unwrap(), callee_def_id).
-                        arg_alloc_sites.as_mut().unwrap()[i].insert(
-                            AllocSite::LocBB(bb.as_u32()));
+                    update_callee_arg_def_sites(callee_def_id, i,
+                                      DefSite::LocBB(bb.as_u32()), summary);
                 }
             }
         }
@@ -187,18 +212,17 @@ fn analyze_fn_core(bb: BasicBlock, body: &Body<'tcx>, callee_def_id: DefId,
             for arg in body.args_iter() {
                 if arg_locals.contains(&arg) {
                     arg_locals.remove(&arg);
-                    get_callee(summary.callees.as_mut().unwrap(), callee_def_id).
-                        arg_alloc_sites.as_mut().unwrap()[i].insert(
-                            AllocSite::Arg(arg.as_u32()));
+                    update_callee_arg_def_sites(callee_def_id, i,
+                        DefSite::Arg(arg.as_u32()), summary);
                 }
             }
         }
     }
 }
 
-/// Analyze a function to find its callees and the allocations sites of all
+/// Analyze a function to find its callees and the definition sites of all
 /// Place used by the callees.
-fn analyze_fn(tcx: TyCtxt<'tcx>, body: &Body<'tcx>, summary: &mut Summary) {
+fn analyze_fn(body: &Body<'tcx>, summary: &mut Summary) {
     // BB that end with a call.
     let mut bb_with_calls = Vec::new();
     // Callee functions that have been seen.
@@ -215,16 +239,16 @@ fn analyze_fn(tcx: TyCtxt<'tcx>, body: &Body<'tcx>, summary: &mut Summary) {
             let def_id = get_fn_def_id(f);
             if !recorded.contains(&def_id) {
                 recorded.insert(def_id);
-                let arg_alloc_sites = if args.is_empty() { None } else {
-                    let mut arg_alloc_sites = Vec::with_capacity(args.len());
+                let arg_def_sites = if args.is_empty() { None } else {
+                    let mut arg_def_sites = Vec::with_capacity(args.len());
                     for _ in 0..args.len() {
-                        arg_alloc_sites.push(FxHashSet::default());
+                        arg_def_sites.push(FxHashSet::default());
                     }
-                    Some(arg_alloc_sites) };
+                    Some(arg_def_sites) };
                 summary.callees.as_mut().unwrap().push(Callee {
-                    name: tcx.opt_item_name(def_id).unwrap().to_string(),
+                    name: get_fn_name(f),
                     id: break_def_id(def_id),
-                    arg_alloc_sites: arg_alloc_sites
+                    arg_def_sites: arg_def_sites
                 });
             }
         }
@@ -246,7 +270,7 @@ fn analyze_fn(tcx: TyCtxt<'tcx>, body: &Body<'tcx>, summary: &mut Summary) {
                 for place in places { arg_locals.insert(place.local); }
                 locals.push(arg_locals);
             }
-            // Enter the core procedure of finding alloc sites for fn args.
+            // Enter the core procedure of finding def sites for fn args.
             analyze_fn_core(bb, body, get_fn_def_id(f), &mut locals,
                             &mut visited, summary);
         } else {
@@ -275,7 +299,8 @@ pub fn summarize(tcx: TyCtxt<'tcx>, def_id: DefId, summaries: &mut Vec::<Summary
     println!("[summarize_fn]: Processing function {}::{}",
         get_crate_name(tcx, def_id), name.unwrap());
     let body = tcx.optimized_mir(def_id);
-    analyze_fn(tcx, body, &mut summary);
+
+    analyze_fn(body, &mut summary);
 
     summaries.push(summary);
 }
