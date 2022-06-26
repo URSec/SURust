@@ -168,6 +168,17 @@ fn analyze_fn_core(bb: BasicBlock, body: &Body<'tcx>, callee_def_id: DefId,
         }
     }
 
+    // Recursively examine the current BB's predecessors.
+    let predecessors = &body.predecessors()[bb];
+    for pbb in predecessors {
+        if predecessors.len() > 1 {
+            analyze_fn_core(*pbb, body, callee_def_id, &mut locals.clone(),
+                            visited, summary);
+        } else {
+            analyze_fn_core(*pbb, body, callee_def_id, locals, visited, summary);
+        }
+    }
+
     // After examine the first BB, check if any function arguments
     // contribute to the definition/declaration of function call arguments.
     if bb.index() == 0 {
@@ -261,7 +272,8 @@ pub fn summarize(tcx: TyCtxt<'tcx>, def_id: DefId, summaries: &mut Vec::<Summary
         ret: None,
     };
 
-    println!("[summarize_fn]: Processing function {} ({:?})", name.unwrap(), def_id.index);
+    println!("[summarize_fn]: Processing function {}::{}",
+        get_crate_name(tcx, def_id), name.unwrap());
     let body = tcx.optimized_mir(def_id);
     analyze_fn(tcx, body, &mut summary);
 

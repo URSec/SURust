@@ -7,6 +7,11 @@ use rustc_hir::def_id::{DefId};
 use super::database::*;
 use super::debug::*;
 
+#[inline(always)]
+crate fn get_crate_name(tcx: TyCtxt<'tcx>, def_id: DefId) -> String {
+    return tcx.crate_name(def_id.krate).to_ident_string();
+}
+
 /// A helper function that filters out uninterested functions.
 #[allow(dead_code)]
 crate fn ignore_fn_dev(tcx: TyCtxt<'tcx>, def_id: DefId) -> bool {
@@ -38,8 +43,7 @@ crate fn ignore_fn(tcx: TyCtxt<'tcx>, def_id: DefId) -> bool {
         return true;
     }
 
-    let crate_name = tcx.crate_name(def_id.krate).to_ident_string();
-    if BUILTIN_LIB.contains(&crate_name) { return true; }
+    if BUILTIN_LIB.contains(&get_crate_name(tcx, def_id)) { return true; }
 
     let fn_name = tcx.opt_item_name(def_id);
     if fn_name.is_none() { return true; }
@@ -47,7 +51,6 @@ crate fn ignore_fn(tcx: TyCtxt<'tcx>, def_id: DefId) -> bool {
 
     return false;
 }
-
 
 /// Get the Place in an Operand.
 #[inline(always)]
