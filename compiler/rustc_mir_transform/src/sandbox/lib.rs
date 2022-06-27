@@ -3,6 +3,7 @@
 use rustc_middle::mir::*;
 use rustc_middle::ty::{self, TyCtxt};
 use rustc_hir::def_id::{DefId};
+use rustc_data_structures::fx::{FxHashSet};
 
 use super::database::*;
 use super::debug::*;
@@ -124,6 +125,31 @@ crate fn get_place_in_rvalue(rvalue: &Rvalue<'tcx>, places: &mut Vec<Place<'tcx>
         _ => {}
     }
 }
+
+/// A helper function that collects Local of Place in the arguments of a fn call.
+///
+/// Inputs:
+/// @args: The args of a TerminatorKind::Call.
+/// @locals: Destination for the Local of Place in @args.
+#[inline(always)]
+crate fn get_local_in_args(args: &Vec<Operand<'tcx>>, locals: &mut FxHashSet<Local>) {
+    let mut places = Vec::<Place<'tcx>>::with_capacity(args.len());
+    args.iter().for_each(|arg| get_place_in_operand(arg, &mut places));
+    for place in places { locals.insert(place.local); }
+}
+
+/// A helper function that collects the Locao of Place in a Rvalue.
+///
+/// Inputs:
+/// @rvalue: The target Rvalue.
+/// @locals: Destination for the Local of Place in @rvalue.
+#[inline(always)]
+crate fn get_local_in_rvalue(rvalue: &Rvalue<'tcx>, locals: &mut FxHashSet<Local>) {
+    let mut places = Vec::new();
+    get_place_in_rvalue(rvalue, &mut places);
+    for place in places { locals.insert(place.local); }
+}
+
 
 /// Get the Local of the Place of the return value of a function call, if it
 /// does not return an empty tuple or diverts.
