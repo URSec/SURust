@@ -58,28 +58,38 @@ struct Callee {
 /// Summary of a function.
 #[derive(Serialize, Deserialize)]
 pub struct Summary {
-    // fn_name is not necessary.
+    // fn_name crate_name are not necessary.
     fn_name: String,
+    crate_name: String,
     /// DefIndex
-    fn_id: u32,
+    id: (u32, u32),
     /// Callees used in this function. Key is DefId.
     callees: Vec<Callee>,
     /// Return value
     ret_def_sites: FxHashSet<DefSite>
 }
 
+impl fmt::Debug for DefSite {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let (message, loc) = match self {
+            DefSite::LocBB(loc) => ("BB", loc),
+            DefSite::Arg(arg) => ("Arg", arg)
+        };
+        write!(f, "{}: {}", message, loc)
+    }
+}
+
 impl fmt::Debug for Callee {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // TODO? Print out arguments' definition sites.
-        write!(f, "{} (ID:{:?}", self.name, self.id)
+        write!(f, "{} (ID:{:?}; arg_def_sites: {:?}", self.name, self.id,
+            self.arg_def_sites)
     }
 }
 
 impl fmt::Debug for Summary {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let callees = &self.callees;
-        // TODO: Add Summary.ret.
-        write!(f, "{} (id: {}): Callees: {:?}", self.fn_name, self.fn_id, callees)
+        write!(f, "{}::{} {:?}:\nCallees: {:?}\nReturn: {:?}\n", self.crate_name,
+            self.fn_name, self.id, self.callees, self.ret_def_sites)
     }
 }
 
@@ -399,20 +409,21 @@ fn analyze_fn(body: &Body<'tcx>, summary: &mut Summary) {
 /// Entrance of this module.
 pub fn summarize(tcx: TyCtxt<'tcx>, def_id: DefId, summaries: &mut Vec::<Summary>) {
     // Filter out uninterested functions.
-    if ignore_fn(tcx, def_id) { return; }
+    if ignore_fn_dev(tcx, def_id) { return; }
 
     let name = tcx.opt_item_name(def_id);
 
     // Init a summary.
+    let crate_name = get_crate_name(tcx, def_id);
     let mut summary = Summary {
         fn_name:  name.unwrap().name.to_ident_string(),
-        fn_id: def_id.index.as_u32(),
+        crate_name: crate_name.clone(),
+        id: break_def_id(def_id),
         callees: Vec::new(),
         ret_def_sites: FxHashSet::default(),
     };
 
-    println!("[summarize_fn]: Processing function {}::{}",
-        get_crate_name(tcx, def_id), name.unwrap());
+    println!("[summarize_fn]: Processing function {}::{}", crate_name, name.unwrap());
     let body = tcx.optimized_mir(def_id);
 
     analyze_fn(body, &mut summary);
