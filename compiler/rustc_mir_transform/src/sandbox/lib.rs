@@ -48,15 +48,23 @@ crate fn ignore_fn_dev(tcx: TyCtxt<'tcx>, def_id: DefId) -> bool {
 /// Question: Do we need exclude all the crates in "rust/library"?
 #[inline(always)]
 crate fn ignore_fn(tcx: TyCtxt<'tcx>, def_id: DefId) -> bool {
+    // Ignore compiler builtins.
     if tcx.is_compiler_builtins(def_id.krate) {
         return true;
     }
 
-    if BUILTIN_LIB.contains(&get_crate_name(tcx, def_id)) { return true; }
+    // Ignore standard and builtin libraries.
+    let crate_name = get_crate_name(tcx, def_id);
+    if BUILTIN_LIB.contains(&crate_name) { return true; }
 
+    // Ignore functions without a name.
+    // Jie Zhou: What are these functions exactly?
     let fn_name = tcx.opt_item_name(def_id);
     if fn_name.is_none() { return true; }
     if fn_name.unwrap().name.is_empty() { return true; }
+
+    // Ignore main() from build_script_build
+    if crate_name == "build_script_build" { return true; }
 
     return false;
 }
