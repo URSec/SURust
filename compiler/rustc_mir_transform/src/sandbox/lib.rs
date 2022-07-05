@@ -64,7 +64,10 @@ crate fn ignore_fn(tcx: TyCtxt<'tcx>, def_id: DefId) -> bool {
     if fn_name.unwrap().name.is_empty() { return true; }
 
     // Ignore main() from build_script_build
-    if crate_name == "build_script_build" { return true; }
+    // Any others?
+    if crate_name == "build_script_build" || crate_name == "build_script_main" {
+        return true;
+    }
 
     return false;
 }
