@@ -59,8 +59,8 @@ struct Callee {
 #[derive(Serialize, Deserialize)]
 pub struct Summary {
     // fn_name crate_name are not necessary.
-    fn_name: String,
-    crate_name: String,
+    pub fn_name: String,
+    pub crate_name: String,
     /// DefIndex
     id: (u32, u32),
     /// Callees used in this function. Key is DefId.
@@ -409,7 +409,7 @@ fn analyze_fn(body: &Body<'tcx>, summary: &mut Summary) {
 /// Entrance of this module.
 pub fn summarize(tcx: TyCtxt<'tcx>, def_id: DefId, summaries: &mut Vec::<Summary>) {
     // Filter out uninterested functions.
-    if ignore_fn_dev(tcx, def_id) { return; }
+    if ignore_fn(tcx, def_id) { return; }
 
     let name = tcx.opt_item_name(def_id);
 

@@ -317,12 +317,25 @@ pub fn collect_crate_mono_items(
         });
     }
 
-    // Sandbox unsafe Rust
-    //
-    // TODO:
-    // 1. Summarize needed information of each function.
-    // 2. Write the summarized data to a file for later summary-based
-    // inter-procedural analysis.
+    // Sandbox unsafe Rust.
+    sandbox_unsafe(tcx, &visited);
+
+    (visited.into_inner(), inlining_map.into_inner())
+}
+
+
+/// Sandbox unsafe Rust.
+///
+/// 1. Summarize each function in the current crate.
+/// 2. Write the summaries to a file.
+/// 3. Let the crate with main() be the leader process to combine all the
+///    summaries, and then to analyze the combined summary.
+/// 4. Other processes wait for the final summary, and then analyze and transform.
+///
+/// TODO:
+/// Write the summarized data to a file for later summary-based inter-procedural
+/// analysis.
+fn sandbox_unsafe(tcx: TyCtxt<'tcx>, visited: &MTLock<FxHashSet<MonoItem<'tcx>>>) {
     let mut summaries = Vec::<summarize_fn::Summary>::new();
     // rustc actually only keeps one copy of MIR for all the MonoItem that are
     // from the same function with generic type parameter(s).
@@ -331,9 +344,8 @@ pub fn collect_crate_mono_items(
         match item {
             MonoItem::Fn(instance) => {
                 let def_id = instance.def_id();
-                if !processed.contains(&def_id.index) {
+                if processed.insert(def_id) {
                     summarize_fn::summarize(tcx, def_id, &mut summaries);
-                    processed.insert(def_id.index);
                 }
             },
             _ => {}
@@ -342,14 +354,17 @@ pub fn collect_crate_mono_items(
 
     println!("\nSummaries:");
     for summary in &summaries {
-        println!("{:?}", summary);
+        if summary.fn_name == "main" {
+            println!("{:?}", summary);
+            break;
+        }
+        // println!("{:?}", summary);
     }
     let serialized = serde_json::to_string(&summaries).unwrap();
     // println!("\nSerialized Summaries: {:?}", serialized);
     let _deserialized = serde_json::from_str::<Vec<summarize_fn::Summary>>(&serialized);
     // println!("Summaries:\n{:?}", _deserialized.unwrap());
 
-    (visited.into_inner(), inlining_map.into_inner())
 }
 
 // Find all non-generic items by walking the HIR. These items serve as roots to
