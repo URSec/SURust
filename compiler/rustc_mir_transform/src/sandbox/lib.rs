@@ -1,8 +1,8 @@
 //! Library functions for the sandboxing unsafe code project.
 
 use rustc_middle::mir::*;
-use rustc_middle::ty::{self, TyCtxt};
-use rustc_hir::def_id::{DefId};
+use rustc_middle::ty::{self, TyCtxt, Ty};
+use rustc_hir::def_id::{DefId, DefIndex, CrateNum, LOCAL_CRATE};
 use rustc_data_structures::fx::{FxHashSet};
 
 use super::database::*;
@@ -14,10 +14,16 @@ crate fn get_crate_name(tcx: TyCtxt<'tcx>, def_id: DefId) -> String {
 }
 
 #[inline(always)]
-#[allow(dead_code)]
 crate fn get_fn_name(f: &Constant<'tcx>) -> String {
     ty::tls::with(|tcx| {
         return tcx.opt_item_name(get_fn_def_id(f)).unwrap().name.to_string();
+    })
+}
+
+#[inline(always)]
+crate fn get_local_crate_name() -> String {
+    ty::tls::with(|tcx| {
+        return tcx.crate_name(LOCAL_CRATE).to_ident_string();
     })
 }
 
@@ -178,6 +184,15 @@ crate fn get_ret_local(ret: &Option<(Place<'tcx>, BasicBlock)>,
     None
 }
 
+#[inline(always)]
+crate fn empty_return(t: Ty<'tcx>) -> bool {
+    if let ty::Tuple(tys) = t.kind() {
+        if tys.len() == 0 { return true; }
+    }
+
+    return false;
+}
+
 /// Get a function's DefId from a function Constant.
 #[inline(always)]
 crate fn get_fn_def_id(f: &Constant<'tcx>) -> DefId {
@@ -192,4 +207,13 @@ crate fn get_fn_def_id(f: &Constant<'tcx>) -> DefId {
 #[inline(always)]
 crate fn break_def_id(def_id: DefId) -> (u32, u32) {
     (def_id.index.as_u32(), def_id.krate.as_u32())
+}
+
+/// Create a DefId based on two u32 as DefIndex and CrateNum.
+#[inline(always)]
+crate fn create_defid((index, krate): (u32, u32)) -> DefId {
+    DefId {
+        index: DefIndex::from_u32(index),
+        krate: CrateNum::from_u32(krate)
+    }
 }

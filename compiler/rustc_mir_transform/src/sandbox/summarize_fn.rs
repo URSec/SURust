@@ -8,8 +8,13 @@ use rustc_hir::def_id::{DefId};
 use rustc_data_structures::fx::{FxHashSet, FxHashMap};
 use serde::{Deserialize, Serialize};
 use std::fmt;
+use nix::unistd::getppid;
+use std::fs;
+use std::path::Path;
 
 use super::lib::*;
+
+static _DEBUG: bool = false;
 
 /// Definition site of a Place can be one of the following cases:
 /// 1. Global variable
@@ -429,4 +434,39 @@ pub fn summarize(tcx: TyCtxt<'tcx>, def_id: DefId, summaries: &mut Vec::<Summary
     analyze_fn(body, &mut summary);
 
     summaries.push(summary);
+}
+
+/// Check if a Summary is for the main() fn.
+pub fn is_main(tcx: TyCtxt<'tcx>, summary: &Summary) -> bool {
+    if summary.fn_name != "main" { return false; }
+
+    // Check signature. There might be other main fn which have different
+    // signatures than the main() in the application itself.
+    let body = tcx.optimized_mir(create_defid(summary.id));
+    if body.arg_count == 0 && empty_return(body.return_ty()) { return true; }
+    return false;
+}
+
+/// Write the summaries of a crate to a temporary file.
+pub fn write_summaries_to_file(summaries: &Vec<Summary>) {
+    let dir = "/tmp/rust-sandbox-".to_owned() + &getppid().to_string();
+    let local_crate_name = get_local_crate_name();
+    if !Path::new(&dir).exists() {
+        // Jie Zhou: For some unknown reason(s), besides the directory for the
+        // crates used in the target app, there may be extra directories to be
+        // created and those directories contain files named probe{1,2,3..}.
+        // Some probe* files are empty. Don't know why they are generated and
+        // what they are exactly.
+        fs::create_dir(&dir).
+            expect(&(["Failed to mkdir for crate ", &local_crate_name].join("")));
+    }
+
+    // Serialize summaries to a string and write the string to a file.
+    let serialized = serde_json::to_string(&summaries).unwrap();
+    fs::write(dir + "/" + &local_crate_name, &serialized).
+        expect("Failed to write summaries");
+
+     if _DEBUG {
+         println!("\nSerialized Summaries: {:?}", serialized);
+     }
 }

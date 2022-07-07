@@ -19,3 +19,4 @@ rustc_span = { path = "../rustc_span" }
 rustc_target = { path = "../rustc_target" }
 rustc_mir_transform = { path = "../rustc_mir_transform" }
 serde_json = "1"
+nix = "0.23"

@@ -208,6 +208,7 @@ use std::path::PathBuf;
 
 // Sandboxing
 use rustc_mir_transform::sandbox::*;
+use rustc_mir_transform::sandbox::summarize_fn::*;
 
 #[derive(PartialEq)]
 pub enum MonoItemCollectionMode {
@@ -331,10 +332,7 @@ pub fn collect_crate_mono_items(
 /// 3. Let the crate with main() be the leader process to combine all the
 ///    summaries, and then to analyze the combined summary.
 /// 4. Other processes wait for the final summary, and then analyze and transform.
-///
-/// TODO:
-/// Write the summarized data to a file for later summary-based inter-procedural
-/// analysis.
+static _DEBUG: bool = false;
 fn sandbox_unsafe(tcx: TyCtxt<'tcx>, visited: &MTLock<FxHashSet<MonoItem<'tcx>>>) {
     let mut summaries = Vec::<summarize_fn::Summary>::new();
     // rustc actually only keeps one copy of MIR for all the MonoItem that are
@@ -352,19 +350,27 @@ fn sandbox_unsafe(tcx: TyCtxt<'tcx>, visited: &MTLock<FxHashSet<MonoItem<'tcx>>>
         }
     }
 
-    println!("\nSummaries:");
+    let mut main_num = 0;
     for summary in &summaries {
-        if summary.fn_name == "main" {
-            println!("{:?}", summary);
-            break;
-        }
-        // println!("{:?}", summary);
+        if is_main(tcx, summary) { main_num += 1; }
     }
-    let serialized = serde_json::to_string(&summaries).unwrap();
-    // println!("\nSerialized Summaries: {:?}", serialized);
-    let _deserialized = serde_json::from_str::<Vec<summarize_fn::Summary>>(&serialized);
-    // println!("Summaries:\n{:?}", _deserialized.unwrap());
+    assert!(main_num < 2, "There are more than one main()");
+    if main_num == 0 {
+        // Write the summaries of a dependency crate to a temporal file.
+        summarize_fn::write_summaries_to_file(&summaries);
+    } else {
+        // This is the main crate.
+        // TODO: Read all the summaries from crates and do analysis on them.
+    }
 
+    if _DEBUG {
+        println!("\nSummaries:");
+        for summary in &summaries {
+            println!("{:?}", summary);
+        }
+    }
+
+    // let _deserialized = serde_json::from_str::<Vec<summarize_fn::Summary>>(&serialized);
 }
 
 // Find all non-generic items by walking the HIR. These items serve as roots to
