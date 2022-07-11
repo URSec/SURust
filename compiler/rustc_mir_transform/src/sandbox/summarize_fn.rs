@@ -8,7 +8,6 @@ use rustc_hir::def_id::{DefId};
 use rustc_data_structures::fx::{FxHashSet, FxHashMap};
 use serde::{Deserialize, Serialize};
 use std::fmt;
-use nix::unistd::getppid;
 use std::fs;
 use std::path::Path;
 
@@ -428,7 +427,9 @@ pub fn summarize(tcx: TyCtxt<'tcx>, def_id: DefId, summaries: &mut Vec::<Summary
         ret_def_sites: FxHashSet::default(),
     };
 
-    println!("[summarize_fn]: Processing function {}::{}", crate_name, name.unwrap());
+    if _DEBUG {
+        println!("[summarize_fn]: Processing function {}::{}", crate_name, name.unwrap());
+    }
     let body = tcx.optimized_mir(def_id);
 
     analyze_fn(body, &mut summary);
@@ -449,8 +450,10 @@ pub fn is_main(tcx: TyCtxt<'tcx>, summary: &Summary) -> bool {
 
 /// Write the summaries of a crate to a temporary file.
 pub fn write_summaries_to_file(summaries: &Vec<Summary>) {
-    let dir = "/tmp/rust-sandbox-".to_owned() + &getppid().to_string();
     let local_crate_name = get_local_crate_name();
+    if ignore_build_crate(&local_crate_name) { return; }
+
+    let dir = get_summary_dir();
     if !Path::new(&dir).exists() {
         // Jie Zhou: For some unknown reason(s), besides the directory for the
         // crates used in the target app, there may be extra directories to be

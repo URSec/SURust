@@ -4,6 +4,7 @@ use rustc_middle::mir::*;
 use rustc_middle::ty::{self, TyCtxt, Ty};
 use rustc_hir::def_id::{DefId, DefIndex, CrateNum, LOCAL_CRATE};
 use rustc_data_structures::fx::{FxHashSet};
+use nix::unistd::getppid;
 
 use super::database::*;
 use super::debug::*;
@@ -20,6 +21,7 @@ crate fn get_fn_name(f: &Constant<'tcx>) -> String {
     })
 }
 
+/// Get the name of the currently compiled crate.
 #[inline(always)]
 crate fn get_local_crate_name() -> String {
     ty::tls::with(|tcx| {
@@ -70,12 +72,16 @@ crate fn ignore_fn(tcx: TyCtxt<'tcx>, def_id: DefId) -> bool {
     if fn_name.unwrap().name.is_empty() { return true; }
 
     // Ignore main() from build_script_build
-    // Any others?
-    if crate_name == "build_script_build" || crate_name == "build_script_main" {
-        return true;
-    }
+    if ignore_build_crate(&crate_name) { return true; }
 
     return false;
+}
+
+/// Ignore crates from build.rs.
+/// Any others?
+#[inline(always)]
+crate fn ignore_build_crate(name: &str) -> bool {
+    return name == "build_script_build" || name == "build_script_main";
 }
 
 /// Get the Place in an Operand.
@@ -216,4 +222,12 @@ crate fn create_defid((index, krate): (u32, u32)) -> DefId {
         index: DefIndex::from_u32(index),
         krate: CrateNum::from_u32(krate)
     }
+}
+
+/// Get the directory that contains all the summary files.
+///
+/// We assume that a Rust project is built by invoking `cargo`. The getppid()
+/// would therefore be the pid of the cargo process.
+crate fn get_summary_dir() -> String {
+    return "/tmp/rust-sandbox-".to_owned() + &getppid().to_string();
 }

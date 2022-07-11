@@ -208,7 +208,6 @@ use std::path::PathBuf;
 
 // Sandboxing
 use rustc_mir_transform::sandbox::*;
-use rustc_mir_transform::sandbox::summarize_fn::*;
 
 #[derive(PartialEq)]
 pub enum MonoItemCollectionMode {
@@ -352,25 +351,24 @@ fn sandbox_unsafe(tcx: TyCtxt<'tcx>, visited: &MTLock<FxHashSet<MonoItem<'tcx>>>
 
     let mut main_num = 0;
     for summary in &summaries {
-        if is_main(tcx, summary) { main_num += 1; }
+        if summarize_fn::is_main(tcx, summary) { main_num += 1; }
     }
     assert!(main_num < 2, "There are more than one main()");
     if main_num == 0 {
         // Write the summaries of a dependency crate to a temporal file.
         summarize_fn::write_summaries_to_file(&summaries);
     } else {
-        // This is the main crate.
-        // TODO: Read all the summaries from crates and do analysis on them.
-    }
-
-    if _DEBUG {
-        println!("\nSummaries:");
-        for summary in &summaries {
-            println!("{:?}", summary);
+        if _DEBUG {
+            println!("\nSummaries:");
+            for summary in &summaries {
+                println!("{:?}", summary);
+            }
         }
+        // This is the main crate.
+        // Read all the summaries from crates and do analysis on them.
+        wpa::wpa(summaries);
     }
 
-    // let _deserialized = serde_json::from_str::<Vec<summarize_fn::Summary>>(&serialized);
 }
 
 // Find all non-generic items by walking the HIR. These items serve as roots to
