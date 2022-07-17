@@ -1,6 +1,6 @@
 //! Whole-program analysis. Specifically, we analyze the call graph.
 
-use std::fs::{read_dir,read_to_string};
+use std::fs::{read_dir,read_to_string,remove_dir_all};
 use std::io;
 use rustc_data_structures::fx::{FxHashMap, FxHashSet};
 use std::fmt;
@@ -109,15 +109,15 @@ pub fn wpa(main_summaries: Vec<Summary>) {
     let dep_summaries = read_summaries();
     if dep_summaries.is_err() { return; }
 
-    // TODO: Start to do analysis.
     let mut all_summaries = dep_summaries.unwrap();
     all_summaries.push(main_summaries);
 
     // Buld a call graph.
     let _ = build_call_graph(&all_summaries);
 
-    // TODO: Delete the summary folder. This is necessayr because a compilation
+    // Delete the summary folder. This is necessayr because a compilation
     // may happen to have the same ppid as one older compilation.
+    let _ = remove_dir_all(get_summary_dir());
 }
 
 
