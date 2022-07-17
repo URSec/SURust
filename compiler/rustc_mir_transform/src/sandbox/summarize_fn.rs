@@ -47,13 +47,13 @@ impl PartialEq for DefSite {
 /// allocation/declaration sites for all the arguments of a callee. Note that
 /// we do not need to distinguish each call to the same callee.
 #[derive(Serialize, Deserialize)]
-struct Callee {
-    /// Callee name
-    name: String,
+crate struct Callee {
+    pub fn_name: String,
+    pub crate_name: String,
     /// DefId {DefIndex, CrateNum}
     id: (u32, u32),
     /// The locations of the definition site for each argument. For example,
-    /// [[l0, l1], [l2, _2]] means the caller has two arguments, and the first
+    /// [[l0, l1], [l2, _2]] means the callee has two arguments, and the first
     /// argument is computed from Terminator l0 and l1, and the second is from
     /// Terminator l2 and local _2 (an argument or local var).
     arg_def_sites: Vec<FxHashSet<DefSite>>,
@@ -62,13 +62,12 @@ struct Callee {
 /// Summary of a function.
 #[derive(Serialize, Deserialize)]
 pub struct Summary {
-    // fn_name crate_name are not necessary.
     pub fn_name: String,
     pub crate_name: String,
-    /// DefIndex
+    /// DefId
     id: (u32, u32),
     /// Callees used in this function. Key is DefId.
-    callees: Vec<Callee>,
+    crate callees: Vec<Callee>,
     /// Return value
     ret_def_sites: FxHashSet<DefSite>
 }
@@ -85,7 +84,7 @@ impl fmt::Debug for DefSite {
 
 impl fmt::Debug for Callee {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{} (ID:{:?}; arg_def_sites: {:?}", self.name, self.id,
+        write!(f, "{} (ID:{:?}; arg_def_sites: {:?}", self.fn_name, self.id,
             self.arg_def_sites)
     }
 }
@@ -97,7 +96,7 @@ impl fmt::Debug for Summary {
     }
 }
 
-/// Get the target Callee by DefId.
+/// Get the target Callee by DefId from the vector of Callee used by a fn.
 ///
 /// This may not be that slow as it looks because a function usually only has
 /// a limited number of callees. We did not use a HashSet for Summary.callees
@@ -342,7 +341,8 @@ fn analyze_fn(body: &Body<'tcx>, summary: &mut Summary) {
                     }
                 }
                 summary.callees.push(Callee {
-                    name: get_fn_name(f),
+                    fn_name: get_fn_name(def_id),
+                    crate_name: get_crate_name(def_id),
                     id: break_def_id(def_id),
                     arg_def_sites: arg_def_sites
                 });
@@ -418,7 +418,7 @@ pub fn summarize(tcx: TyCtxt<'tcx>, def_id: DefId, summaries: &mut Vec::<Summary
     let name = tcx.opt_item_name(def_id);
 
     // Init a summary.
-    let crate_name = get_crate_name(tcx, def_id);
+    let crate_name = get_crate_name(def_id);
     let mut summary = Summary {
         fn_name:  name.unwrap().name.to_ident_string(),
         crate_name: crate_name.clone(),

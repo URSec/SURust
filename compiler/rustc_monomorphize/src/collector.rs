@@ -331,7 +331,6 @@ pub fn collect_crate_mono_items(
 /// 3. Let the crate with main() be the leader process to combine all the
 ///    summaries, and then to analyze the combined summary.
 /// 4. Other processes wait for the final summary, and then analyze and transform.
-static _DEBUG: bool = false;
 fn sandbox_unsafe(tcx: TyCtxt<'tcx>, visited: &MTLock<FxHashSet<MonoItem<'tcx>>>) {
     let mut summaries = Vec::<summarize_fn::Summary>::new();
     // rustc actually only keeps one copy of MIR for all the MonoItem that are
@@ -358,17 +357,10 @@ fn sandbox_unsafe(tcx: TyCtxt<'tcx>, visited: &MTLock<FxHashSet<MonoItem<'tcx>>>
         // Write the summaries of a dependency crate to a temporal file.
         summarize_fn::write_summaries_to_file(&summaries);
     } else {
-        if _DEBUG {
-            println!("\nSummaries:");
-            for summary in &summaries {
-                println!("{:?}", summary);
-            }
-        }
         // This is the main crate.
         // Read all the summaries from crates and do analysis on them.
         wpa::wpa(summaries);
     }
-
 }
 
 // Find all non-generic items by walking the HIR. These items serve as roots to

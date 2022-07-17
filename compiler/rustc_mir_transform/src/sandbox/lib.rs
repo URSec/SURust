@@ -10,14 +10,16 @@ use super::database::*;
 use super::debug::*;
 
 #[inline(always)]
-crate fn get_crate_name(tcx: TyCtxt<'tcx>, def_id: DefId) -> String {
-    return tcx.crate_name(def_id.krate).to_ident_string();
+crate fn get_crate_name(def_id: DefId) -> String {
+    ty::tls::with(|tcx| {
+        return tcx.crate_name(def_id.krate).to_ident_string();
+    })
 }
 
 #[inline(always)]
-crate fn get_fn_name(f: &Constant<'tcx>) -> String {
+crate fn get_fn_name(def_id: DefId) -> String {
     ty::tls::with(|tcx| {
-        return tcx.opt_item_name(get_fn_def_id(f)).unwrap().name.to_string();
+        return tcx.opt_item_name(def_id).unwrap().name.to_string();
     })
 }
 
@@ -62,7 +64,7 @@ crate fn ignore_fn(tcx: TyCtxt<'tcx>, def_id: DefId) -> bool {
     }
 
     // Ignore standard and builtin libraries.
-    let crate_name = get_crate_name(tcx, def_id);
+    let crate_name = get_crate_name(def_id);
     if BUILTIN_LIB.contains(&crate_name) { return true; }
 
     // Ignore functions without a name.
@@ -161,7 +163,7 @@ crate fn get_local_in_args(args: &Vec<Operand<'tcx>>, locals: &mut FxHashSet<Loc
     for place in places { locals.insert(place.local); }
 }
 
-/// A helper function that collects the Locao of Place in a Rvalue.
+/// A helper function that collects the Local of Place in a Rvalue.
 ///
 /// Inputs:
 /// @rvalue: The target Rvalue.
