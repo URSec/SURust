@@ -3,7 +3,7 @@
 use rustc_middle::mir::*;
 use rustc_data_structures::fx::{FxHashSet};
 
-use super::summarize_fn::unsafe_def::{UnsafeAllocSite};
+use super::summarize_fn::{DefSite};
 
 // This function whitelist is a helper for development only.
 lazy_static!{
@@ -105,18 +105,15 @@ crate fn print_local(type_name: &str, local: Local) {
 /// Print all the unsafe allocation sites of a function.
 #[allow(dead_code)]
 #[inline(always)]
-crate fn print_unsafe_alloc(results: &FxHashSet::<UnsafeAllocSite<'tcx>>) {
-    println!("Unsafe allocation sites:");
+crate fn print_unsafe_alloc(results: &FxHashSet::<DefSite>) {
+    println!("Unsafe def sites:");
 
     for site in results.iter() {
         match &site {
-            UnsafeAllocSite::Alloc(alloc) => {
-                print_terminator("Heap Alloc", alloc);
+            DefSite::LocBB(bb) => {
+                println!("Call at BB {}", bb);
             },
-            UnsafeAllocSite::Ret(ret) => {
-                print_terminator("Fn Ret", ret);
-            },
-            UnsafeAllocSite::Arg(arg) => {
+            DefSite::Arg(arg) => {
                 println!("Argument: {:?}", arg);
             }
         }

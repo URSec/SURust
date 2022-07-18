@@ -25,6 +25,45 @@ use calls::*;
 
 static _DEBUG: bool = false;
 
+/// Definition site of a Place can be one of the following cases:
+/// 1. Global variable
+/// 2. Local variable on the stack
+/// 3. Return value of call, including heap allocation and other function call
+/// 4. Function argument.
+///
+/// Currently we only aim to isolate unsafe heap memory, so we only handle
+/// case 3 and 4.
+#[derive(Hash, Eq, Serialize, Deserialize)]
+crate enum DefSite {
+    /// Location of a terminator.
+    /// Since it will always be a Terminator, can we just use a BasicBlock?
+    LocBB(u32),
+    /// Local of an argument
+    Arg(u32),
+}
+
+impl PartialEq for DefSite {
+    fn eq(&self, other: &DefSite) -> bool {
+        match (self, other) {
+            (DefSite::LocBB(loc_bb), DefSite::LocBB(loc_bb1)) =>
+                loc_bb == loc_bb1,
+            (DefSite::Arg(arg), DefSite::Arg(arg1)) => arg == arg1,
+            _ => false
+        }
+    }
+}
+
+impl fmt::Debug for DefSite {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let (message, loc) = match self {
+            DefSite::LocBB(loc) => ("BB", loc),
+            DefSite::Arg(arg) => ("Arg", arg)
+        };
+        write!(f, "{}: {}", message, loc)
+    }
+}
+
+
 /// Summary of a function.
 #[derive(Serialize, Deserialize)]
 pub struct Summary {
@@ -34,8 +73,10 @@ pub struct Summary {
     id: (u32, u32),
     /// Callees used in this function. Key is DefId.
     crate callees: Vec<Callee>,
-    /// Return value
-    ret_def_sites: FxHashSet<DefSite>
+    /// DefSite of Place in Return value
+    ret_def_sites: FxHashSet<DefSite>,
+    /// DefSite of Place in unsafe code
+    unsafe_def_sites: Option<FxHashSet<DefSite>>
 }
 
 impl fmt::Debug for Summary {
@@ -50,26 +91,29 @@ pub fn summarize(tcx: TyCtxt<'tcx>, def_id: DefId, summaries: &mut Vec::<Summary
     // Filter out uninterested functions.
     if ignore_fn(tcx, def_id) { return; }
 
-    let name = tcx.opt_item_name(def_id);
-
     // Init a summary.
     let crate_name = get_crate_name(def_id);
+    let fn_name = tcx.opt_item_name(def_id).unwrap().name.to_ident_string();
+    if _DEBUG {
+        println!("[summarize_fn::calls]: Processing fn {}::{}", crate_name, fn_name);
+    }
+
     let mut summary = Summary {
-        fn_name:  name.unwrap().name.to_ident_string(),
-        crate_name: crate_name.clone(),
+        fn_name: fn_name,
+        crate_name: crate_name,
         id: break_def_id(def_id),
         callees: Vec::new(),
         ret_def_sites: FxHashSet::default(),
+        unsafe_def_sites: None
     };
 
-    if _DEBUG {
-        println!("[summarize_fn]: Processing function {}::{}", crate_name, name.unwrap());
-    }
     let body = tcx.optimized_mir(def_id);
 
-    analyze_fn(body, &mut summary);
+    // Analyze calls and return values.
+    calls::analyze_fn(body, &mut summary);
 
-    // TODO: Find the def sites of Place used in unsafe code.
+    // Find the def sites of Place used in unsafe code.
+    unsafe_def::analyze_fn(body, &mut summary);
 
     summaries.push(summary);
 }

@@ -2,13 +2,13 @@
 //! unsafe code.
 
 use rustc_middle::mir::*;
-use rustc_middle::ty::{self,TyCtxt};
-use rustc_hir::def_id::{DefId};
+use rustc_middle::ty::{self};
 use rustc_data_structures::fx::{FxHashSet,FxHashMap};
 
 use crate::sandbox::utils::*;
 use crate::sandbox::database::*;
 use crate::sandbox::debug::*;
+use super::{DefSite,Summary};
 
 // For debugging purpose.
 static _DEBUG: bool = false;
@@ -20,35 +20,6 @@ struct UnsafeOp <'tcx> {
     places: Vec<Place<'tcx>>,
     // Location of the statement or terminator
     location: Location,
-}
-
-#[derive(Hash, Eq)]
-crate enum UnsafeAllocSite<'tcx> {
-    // A heap allocation call, such as Vec::new() or Box::new().
-    Alloc(&'tcx Terminator<'tcx>),
-    // Returned pointer from a non-heap-alloc function call.
-    Ret(&'tcx Terminator<'tcx>),
-    // Argument of a function.
-    Arg(Local),
-}
-
-/// We need to manually implement PartialEq for UnsafeAllocSite because its
-/// variants are not untyped. We implemented Hash and PartialEq for Terminator.
-impl<'tcx> PartialEq for UnsafeAllocSite<'tcx> {
-    fn eq(&self, other: &UnsafeAllocSite<'tcx>) -> bool {
-        match (self, other) {
-            (UnsafeAllocSite::Alloc(alloc), UnsafeAllocSite::Alloc(alloc1)) => {
-                alloc == alloc1
-            },
-            (UnsafeAllocSite::Ret(ret), UnsafeAllocSite::Ret(ret1)) => {
-                ret == ret1
-            },
-            (UnsafeAllocSite::Arg(arg), UnsafeAllocSite::Arg(arg1)) => {
-                arg == arg1
-            },
-            _ => false
-        }
-    }
 }
 
 /// Check if a fn is unsafe, or if a statement/terminator in an unsafe block.
@@ -66,7 +37,7 @@ fn is_unsafe(body: &Body<'tcx>, scope: SourceScope) -> bool {
 }
 
 /// Extract Place in a Statement.
-crate fn get_place_in_stmt(stmt: &Statement<'tcx>, places: &mut Vec::<Place<'tcx>>) {
+fn get_place_in_stmt(stmt: &Statement<'tcx>, places: &mut Vec::<Place<'tcx>>) {
     match &stmt.kind {
         StatementKind::Assign(box (place, rvalue)) => {
             places.push(*place);
@@ -94,7 +65,7 @@ crate fn get_place_in_stmt(stmt: &Statement<'tcx>, places: &mut Vec::<Place<'tcx
             places.push(*place);
         },
         StatementKind::CopyNonOverlapping(box cno) => {
-            print_stmt("CopyNonOverlapping", stmt);
+            if _DEBUG { print_stmt("CopyNonOverlapping", stmt); }
             get_place_in_operand(&cno.src, places);
             get_place_in_operand(&cno.dst, places);
             // Do we really need to record the place of the count arg?
@@ -114,7 +85,7 @@ fn get_place_in_terminator(body: &'tcx Body<'tcx>, terminator: &Terminator<'tcx>
     places: &mut Vec::<Place<'tcx>>) {
     match &terminator.kind {
         TerminatorKind::SwitchInt{discr, ..} => {
-            print_terminator("SwitchInt", terminator);
+            if _DEBUG { print_terminator("SwitchInt", terminator); }
             get_place_in_operand(discr, places);
         },
         TerminatorKind::Drop{place, ..} => {
@@ -179,23 +150,16 @@ fn is_heap_alloc(func: &Constant<'tcx>) -> bool {
 /// @body: The boyd of the target function.
 /// @results: The result vector of all unsafe allocation sites.
 fn find_unsafe_fn_alloc(body: &'tcx Body<'tcx>,
-                        results: &mut FxHashSet::<UnsafeAllocSite<'tcx>>) {
+                        results: &mut FxHashSet::<DefSite>) {
     for arg in body.args_iter() {
-        results.insert(UnsafeAllocSite::Arg(arg));
+        results.insert(DefSite::Arg(arg.as_u32()));
     }
 
-    for (_, data) in body.basic_blocks().iter_enumerated() {
-        match &data.terminator().kind {
-            TerminatorKind::Call{func: Operand::Constant(f), args: _,
-            destination, ..} => {
+    for (bb, bbd) in body.basic_blocks().iter_enumerated() {
+        match &bbd.terminator().kind {
+            TerminatorKind::Call{func: _, args: _, destination, ..} => {
                 if destination.is_some() {
-                    if is_heap_alloc(f) {
-                        // Heap allocation call.
-                        results.insert(UnsafeAllocSite::Alloc(data.terminator()));
-                    } else {
-                        // Regular call that returns something.
-                        results.insert(UnsafeAllocSite::Ret(data.terminator()));
-                    }
+                    results.insert(DefSite::LocBB(bb.as_u32()));
                 }
             },
             _ => {}
@@ -223,7 +187,7 @@ fn find_unsafe_alloc_core(place_locals: &mut FxHashSet<Local>,
                           bb: BasicBlock, unsafe_op: Option<&UnsafeOp<'tcx>>,
                           visited: &mut FxHashSet<BasicBlock>,
                           body: &'tcx Body<'tcx>,
-                          results: &mut FxHashSet::<UnsafeAllocSite<'tcx>>) {
+                          results: &mut FxHashSet::<DefSite>) {
     // Prevent infinite recursions caused by loops.
     if visited.contains(&bb) { return; }
     visited.insert(bb);
@@ -249,9 +213,8 @@ fn find_unsafe_alloc_core(place_locals: &mut FxHashSet<Local>,
                 // 3. a std-lib fn call that returns a ptr, e.g, p = v.as_ptr()
                 if place_locals.contains(&place.local) {
                     // Found a definition site for an unsafe Place.
-                    if is_heap_alloc(f) {
-                        results.insert(UnsafeAllocSite::Alloc(bbd.terminator()));
-                    } else {
+                    results.insert(DefSite::LocBB(bb.as_u32()));
+                    if !is_heap_alloc(f) {
                         // Get Place used in args of the call.
                         let mut place_in_args = Vec::<Place<'tcx>>::new();
                         args.iter().for_each(
@@ -262,7 +225,6 @@ fn find_unsafe_alloc_core(place_locals: &mut FxHashSet<Local>,
                             place_locals.insert(place.local);
                         }
 
-                        results.insert(UnsafeAllocSite::Ret(bbd.terminator()));
                         // TODO: We need distinguish the 2nd and 3rd conditions
                         // because we do not process std libs.
                     }
@@ -316,7 +278,7 @@ fn find_unsafe_alloc_core(place_locals: &mut FxHashSet<Local>,
     if bb.index() == 0  && !place_locals.is_empty() {
        for arg in body.args_iter() {
            if place_locals.contains(&arg) {
-               results.insert(UnsafeAllocSite::Arg(arg));
+               results.insert(DefSite::Arg(arg.as_u32()));
                place_locals.remove(&arg);
            }
        }
@@ -330,7 +292,7 @@ fn find_unsafe_alloc_core(place_locals: &mut FxHashSet<Local>,
 /// iterate over each BB that contains unsafe operations and the BB's
 /// predecessors to find unsafe allocation/declaration sites that generate
 /// those unsafe Place.
-fn find_unsafe_alloc_fn(body: &Body<'tcx>) {
+fn find_unsafe_alloc_fn(body: &Body<'tcx>, results: &mut FxHashSet<DefSite>) {
     // Collect operations in unsafe blocks.
     let mut unsafe_ops = Vec::new();
     for (bb, data) in body.basic_blocks().iter_enumerated() {
@@ -373,7 +335,9 @@ fn find_unsafe_alloc_fn(body: &Body<'tcx>) {
         return;
     }
 
-    println!("Found {} unsafe statements/terminators", unsafe_ops.len());
+    if _DEBUG {
+        println!("Found {} unsafe statements/terminators", unsafe_ops.len());
+    }
 
     // Map each BasicBlock to the last unsafe operation in it.
     let mut bb_ops = FxHashMap::<BasicBlock, UnsafeOp<'tcx>>::default();
@@ -387,7 +351,6 @@ fn find_unsafe_alloc_fn(body: &Body<'tcx>) {
         bb_ops.insert(unsafe_op.location.block, unsafe_op);
     }
 
-    let mut results = FxHashSet::<UnsafeAllocSite<'tcx>>::default();
     // Examine each BB that contains unsafe operation(s).
     for (bb, unsafe_op) in bb_ops {
         // Record visited BasicBlock to avoid infinite cycles due to loop.
@@ -397,37 +360,35 @@ fn find_unsafe_alloc_fn(body: &Body<'tcx>) {
                 {:?}: {:?}", bb, place_locals);
         }
         find_unsafe_alloc_core(&mut place_locals, bb, Some(&unsafe_op),
-                               &mut visited, body, &mut results);
+                               &mut visited, body, results);
     }
 
-    print_unsafe_alloc(&results);
+    if _DEBUG { print_unsafe_alloc(&results); }
 }
 
 /// Entrance of this module.
-#[allow(dead_code)]
-pub fn find_unsafe_alloc(tcx: TyCtxt<'tcx>, def_id: DefId) {
-    // Filter out uninterested functions.
-    if ignore_fn_dev(tcx, def_id) {
-        // Filter uninterested functions for fast development purpose.
-        return;
+pub fn analyze_fn(body: & Body<'tcx>, summary: &mut Summary) {
+    if _DEBUG {
+        let def_id = body.source.def_id();
+        print!("[summarize_fn::analyze_fn]: Processing function {} ({:?})",
+          get_crate_name(def_id), get_fn_name(def_id));
     }
 
-    // Start of the computation.
-    let name = tcx.opt_item_name(def_id);
-    print!("[find_unsafe_alloc]: Processing function {} ({:?})", name.unwrap(), def_id);
-    let body = tcx.optimized_mir(def_id);
-    let mut results = FxHashSet::<UnsafeAllocSite<'tcx>>::default();
-    // Process an unsafe function.
+    let mut results = FxHashSet::<DefSite>::default();
     if is_unsafe(body, SourceInfo::outermost(body.span).scope) {
-        println!(" (an unsafe function)");
+        if _DEBUG { println!(" (an unsafe function)"); }
+
+        // Process an unsafe function.
         find_unsafe_fn_alloc(&body, &mut results);
 
-        print_unsafe_alloc(&results);
-        return;
+        if _DEBUG { print_unsafe_alloc(&results); }
+    } else {
+        if _DEBUG { println!(""); }
+        // Analyze a non-unsafe function.
+        find_unsafe_alloc_fn(body, &mut results);
     }
 
-    println!("");
-
-    // Analyze a non-unsafe function.
-    find_unsafe_alloc_fn(body);
+    if !results.is_empty() {
+        summary.unsafe_def_sites = Some(results);
+    }
 }

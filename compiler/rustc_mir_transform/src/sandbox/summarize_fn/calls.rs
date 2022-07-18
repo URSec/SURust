@@ -9,37 +9,9 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 
 use crate::sandbox::utils::*;
-use super::{Summary};
+use super::{DefSite,Summary};
 
 static _DEBUG: bool = false;
-
-/// Definition site of a Place can be one of the following cases:
-/// 1. Global variable
-/// 2. Local variable on the stack
-/// 3. Return value of call, including heap allocation and other function call
-/// 4. Function argument.
-///
-/// Currently we only aim to isolate unsafe heap memory, so we only handle
-/// case 3 and 4.
-#[derive(Hash, Eq, Serialize, Deserialize)]
-pub(super) enum DefSite {
-    /// Location of a terminator.
-    /// Since it will always be a Terminator, can we just use a BasicBlock?
-    LocBB(u32),
-    /// Local of an argument
-    Arg(u32),
-}
-
-impl PartialEq for DefSite {
-    fn eq(&self, other: &DefSite) -> bool {
-        match (self, other) {
-            (DefSite::LocBB(loc_bb), DefSite::LocBB(loc_bb1)) =>
-                loc_bb == loc_bb1,
-            (DefSite::Arg(arg), DefSite::Arg(arg1)) => arg == arg1,
-            _ => false
-        }
-    }
-}
 
 /// Information of a callee used by a function. Speficially, we collect the
 /// allocation/declaration sites for all the arguments of a callee. Note that
@@ -55,16 +27,6 @@ crate struct Callee {
     /// argument is computed from Terminator l0 and l1, and the second is from
     /// Terminator l2 and local _2 (an argument or local var).
     arg_def_sites: Vec<FxHashSet<DefSite>>,
-}
-
-impl fmt::Debug for DefSite {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let (message, loc) = match self {
-            DefSite::LocBB(loc) => ("BB", loc),
-            DefSite::Arg(arg) => ("Arg", arg)
-        };
-        write!(f, "{}: {}", message, loc)
-    }
 }
 
 impl fmt::Debug for Callee {
