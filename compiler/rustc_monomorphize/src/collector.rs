@@ -207,7 +207,8 @@ use std::ops::Range;
 use std::path::PathBuf;
 
 // Sandboxing
-use rustc_mir_transform::sandbox::*;
+use rustc_mir_transform::sandbox::summarize_fn;
+use rustc_mir_transform::sandbox::wpa;
 
 #[derive(PartialEq)]
 pub enum MonoItemCollectionMode {

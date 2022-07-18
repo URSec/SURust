@@ -1,14 +1,14 @@
-//! This module analyzes a function to find the definition or declaration site
-//! of each heap memory object used in unsafe code.
+//! Analyze a function to find the definition sites of each Place used in
+//! unsafe code.
 
 use rustc_middle::mir::*;
-use rustc_middle::ty::{self, TyCtxt};
+use rustc_middle::ty::{self,TyCtxt};
 use rustc_hir::def_id::{DefId};
-use rustc_data_structures::fx::{FxHashSet, FxHashMap};
+use rustc_data_structures::fx::{FxHashSet,FxHashMap};
 
-use super::debug::*;
-use super::database::*;
-use super::lib::*;
+use crate::sandbox::utils::*;
+use crate::sandbox::database::*;
+use crate::sandbox::debug::*;
 
 // For debugging purpose.
 static _DEBUG: bool = false;
@@ -20,12 +20,6 @@ struct UnsafeOp <'tcx> {
     places: Vec<Place<'tcx>>,
     // Location of the statement or terminator
     location: Location,
-}
-
-#[allow(dead_code)]
-enum Operation <'tcx> {
-    Stmt(&'tcx Statement<'tcx>),
-    Term(&'tcx Terminator<'tcx>)
 }
 
 #[derive(Hash, Eq)]

@@ -1,7 +1,9 @@
+//! A helper module for debugging.
+
 use rustc_middle::mir::*;
 use rustc_data_structures::fx::{FxHashSet};
 
-use super::unsafe_obj::{UnsafeAllocSite};
+use super::summarize_fn::unsafe_def::{UnsafeAllocSite};
 
 // This function whitelist is a helper for development only.
 lazy_static!{

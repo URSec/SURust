@@ -1,4 +1,8 @@
-//! Whole-program analysis. Specifically, we analyze the call graph.
+//! Whole-program analysis. Specifically,
+//!
+//!   1. build a call graph of the whole program.
+//!   2. find def sites of all Place used in unsafe code
+//!   3. find unsafe heap alloc sites inter-procedurally.
 
 use std::fs::{read_dir,read_to_string,remove_dir_all};
 use std::io;
@@ -6,7 +10,7 @@ use rustc_data_structures::fx::{FxHashMap, FxHashSet};
 use std::fmt;
 
 use super::summarize_fn::*;
-use super::lib::*;
+use super::utils::*;
 
 static _DEBUG: bool = false;
 

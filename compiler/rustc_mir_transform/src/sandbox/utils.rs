@@ -1,4 +1,4 @@
-//! Library functions for the sandboxing unsafe code project.
+//! Library functions for the sandboxing unsafe code module.
 
 use rustc_middle::mir::*;
 use rustc_middle::ty::{self, TyCtxt, Ty};
