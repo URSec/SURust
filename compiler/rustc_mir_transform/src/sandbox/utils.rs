@@ -8,6 +8,7 @@ use nix::unistd::getppid;
 
 use super::database::*;
 use super::debug::*;
+use super::summarize_fn::{DefSite};
 
 #[inline(always)]
 crate fn get_crate_name(def_id: DefId) -> String {
@@ -65,7 +66,7 @@ crate fn ignore_fn(tcx: TyCtxt<'tcx>, def_id: DefId) -> bool {
 
     // Ignore standard and builtin libraries.
     let crate_name = get_crate_name(def_id);
-    if BUILTIN_LIB.contains(&crate_name) { return true; }
+    if NATIVE_LIBS.contains(&crate_name) { return true; }
 
     // Ignore functions without a name.
     // Jie Zhou: What are these functions exactly?
@@ -176,24 +177,8 @@ crate fn get_local_in_rvalue(rvalue: &Rvalue<'tcx>, locals: &mut FxHashSet<Local
 }
 
 
-/// Get the Local of the Place of the return value of a function call, if it
-/// does not return an empty tuple or diverts.
-crate fn get_ret_local(ret: &Option<(Place<'tcx>, BasicBlock)>,
-                       body: &Body<'tcx>) -> Option<Local> {
-    if let Some((place, _)) = ret {
-        if let ty::Tuple(tys) = body.local_decls[place.local].ty.kind() {
-            // Empty return value "()".
-            if tys.len() == 0 { return None; }
-            else { return Some(place.local); }
-        }
-        return Some(place.local);
-    }
-
-    None
-}
-
 #[inline(always)]
-crate fn empty_return(t: Ty<'tcx>) -> bool {
+crate fn is_empty_ty(t: Ty<'tcx>) -> bool {
     if let ty::Tuple(tys) = t.kind() {
         if tys.len() == 0 { return true; }
     }
@@ -232,4 +217,19 @@ crate fn create_defid((index, krate): (u32, u32)) -> DefId {
 /// would therefore be the pid of the cargo process.
 crate fn get_summary_dir() -> String {
     return "/tmp/rust-sandbox-".to_owned() + &getppid().to_string();
+}
+
+/// Create a DefSite from a function call.
+crate fn def_site_from_call(f: &Constant<'tcx>, bb_index: u32) -> DefSite {
+    if let ty::FnDef(def_id, _) = *f.literal.ty().kind() {
+        if HEAP_ALLOC.contains(&get_fn_name(def_id)) {
+            return DefSite::HeapAlloc(bb_index);
+        } else if NATIVE_LIBS.contains(&get_crate_name(def_id)) {
+            return DefSite::NativeCall(bb_index);
+        } else {
+            return DefSite::OtherCall(bb_index);
+        }
+    }
+
+    panic!("Not a function");
 }

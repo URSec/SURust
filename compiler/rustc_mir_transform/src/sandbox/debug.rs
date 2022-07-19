@@ -105,12 +105,13 @@ crate fn print_local(type_name: &str, local: Local) {
 /// Print all the unsafe allocation sites of a function.
 #[allow(dead_code)]
 #[inline(always)]
-crate fn print_unsafe_alloc(results: &FxHashSet::<DefSite>) {
+crate fn print_unsafe_def(results: &FxHashSet::<DefSite>) {
     println!("Unsafe def sites:");
 
     for site in results.iter() {
         match &site {
-            DefSite::LocBB(bb) => {
+            DefSite::HeapAlloc(bb) | DefSite::NativeCall(bb) |
+                DefSite::OtherCall(bb) => {
                 println!("Call at BB {}", bb);
             },
             DefSite::Arg(arg) => {

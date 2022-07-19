@@ -26,18 +26,34 @@ use calls::*;
 static _DEBUG: bool = false;
 
 /// Definition site of a Place can be one of the following cases:
+///
 /// 1. Global variable
 /// 2. Local variable on the stack
 /// 3. Return value of call, including heap allocation and other function call
-/// 4. Function argument.
+/// 4. Function argument, which could originally come from 1, 2, or 3
 ///
 /// Currently we only aim to isolate unsafe heap memory, so we only handle
 /// case 3 and 4.
+///
+/// We distinguish the types of calls. This is necessary in later WPA.
+/// Specifically, if we see a Place e.g., _10, is used by unsafe code, and
+/// _10 is defined by a function call, i.e., _10 = func(...), we need to figure
+/// out what func is. If func is a heap allocation function such as Vec::new(),
+/// then we have found an unsafe heap allocation site. If func is a native
+/// library function, no further actions will be executed because we do not
+/// analyze native library functions. Otherwise, func is a normal function
+/// and the analysis should go to query what contribute(s) to the return value
+/// of func. Note that there is no need to analyze the arguments of func in WPA
+/// because unsafe_def has done it.
 #[derive(Hash, Eq, Serialize, Deserialize)]
 crate enum DefSite {
-    /// Location of a terminator.
-    /// Since it will always be a Terminator, can we just use a BasicBlock?
-    LocBB(u32),
+    // Since a call is always a Terminator, we use its BB's index as its location.
+    /// Location of a call to a heap allocation.
+    HeapAlloc(u32),
+    /// Location of a call to a native library function.
+    NativeCall(u32),
+    /// Location of a call to other functions.
+    OtherCall(u32),
     /// Local of an argument
     Arg(u32),
 }
@@ -45,8 +61,9 @@ crate enum DefSite {
 impl PartialEq for DefSite {
     fn eq(&self, other: &DefSite) -> bool {
         match (self, other) {
-            (DefSite::LocBB(loc_bb), DefSite::LocBB(loc_bb1)) =>
-                loc_bb == loc_bb1,
+            (DefSite::HeapAlloc(ha), DefSite::HeapAlloc(ha1)) => ha == ha1,
+            (DefSite::NativeCall(nc), DefSite::NativeCall(nc1)) => nc == nc1,
+            (DefSite::OtherCall(oc), DefSite::OtherCall(oc1)) => oc == oc1,
             (DefSite::Arg(arg), DefSite::Arg(arg1)) => arg == arg1,
             _ => false
         }
@@ -56,7 +73,8 @@ impl PartialEq for DefSite {
 impl fmt::Debug for DefSite {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let (message, loc) = match self {
-            DefSite::LocBB(loc) => ("BB", loc),
+            DefSite::HeapAlloc(loc) | DefSite::NativeCall(loc) |
+                DefSite::OtherCall(loc) => ("BB", loc),
             DefSite::Arg(arg) => ("Arg", arg)
         };
         write!(f, "{}: {}", message, loc)
@@ -125,7 +143,7 @@ pub fn is_main(tcx: TyCtxt<'tcx>, summary: &Summary) -> bool {
     // Check signature. There might be other main fn which have different
     // signatures than the main() in the application itself.
     let body = tcx.optimized_mir(create_defid(summary.id));
-    if body.arg_count == 0 && empty_return(body.return_ty()) { return true; }
+    if body.arg_count == 0 && is_empty_ty(body.return_ty()) { return true; }
     return false;
 }
 

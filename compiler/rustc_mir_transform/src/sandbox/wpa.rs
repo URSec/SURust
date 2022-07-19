@@ -1,15 +1,13 @@
 //! Whole-program analysis. Specifically,
 //!
 //!   1. build a call graph of the whole program.
-//!   2. find def sites of all Place used in unsafe code
-//!   3. find unsafe heap alloc sites inter-procedurally.
+//!   2. find unsafe heap alloc sites inter-procedurally.
 
 use std::fs::{read_dir,read_to_string,remove_dir_all};
-use std::io;
-use rustc_data_structures::fx::{FxHashMap, FxHashSet};
-use std::fmt;
+use rustc_data_structures::fx::{FxHashMap,FxHashSet};
+use std::{fmt,io};
 
-use super::summarize_fn::*;
+use super::summarize_fn::{Summary};
 use super::utils::*;
 
 static _DEBUG: bool = false;
@@ -117,13 +115,12 @@ pub fn wpa(main_summaries: Vec<Summary>) {
     all_summaries.push(main_summaries);
 
     // Buld a call graph.
-    let _ = build_call_graph(&all_summaries);
+    let _cg = build_call_graph(&all_summaries);
 
     // Delete the summary folder. This is necessayr because a compilation
     // may happen to have the same ppid as one older compilation.
     let _ = remove_dir_all(get_summary_dir());
 }
-
 
 /// Print the call graph of the program.
 fn print_cg(cg: &CallGraph<'_>) {

@@ -1,8 +1,8 @@
 use rustc_data_structures::fx::{FxHashSet};
 
-// The set of built-in libraries
+// The set of native libraries provided by Rust.
 lazy_static!{
-    pub static ref BUILTIN_LIB: FxHashSet<String> = {
+    pub static ref NATIVE_LIBS: FxHashSet<String> = {
         let libs = vec![
             "core",
             "std",
@@ -14,7 +14,7 @@ lazy_static!{
             "panic_abort", "panic_unwind",
             "proc_macro",
             // There are several others in "rust/library". Do we need to
-            // includ3 all of them?
+            // include all of them?
         ];
 
         libs.into_iter().map(|x| x.to_string()).collect()

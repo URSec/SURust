@@ -54,7 +54,7 @@ fn get_callee(callees: &mut Vec<Callee>, def_id: DefId) -> &mut Callee {
     panic!("Cannot find a callee");
 }
 
-/// Update Callee.arg_def_sites with a new DefSite.
+/// Update Callee.arg_def_sites by adding a new DefSite.
 ///
 /// Inputs:
 /// @def_id: DefId of the target callee.
@@ -80,10 +80,24 @@ fn update_callee_arg_def_sites(def_id: DefId, index: usize, site: DefSite,
     }
 }
 
-/// Core procedure of finding allocation/declaration sites of each argument
-/// of a function call. It first examines a basic block backwards, and then
-/// recursively examines the BB's predecessors. It is similar to
-/// unsafe_obj::find_unsafe_alloc_core.
+/// Get the Local of the Place of the return value of a function call, if it
+/// does not return an empty tuple or diverts.
+fn get_non_empty_ret_local(ret: &Option<(Place<'tcx>, BasicBlock)>,
+                           body: &Body<'tcx>) -> Option<Local> {
+    if let Some((place, _)) = ret {
+        if is_empty_ty(body.local_decls[place.local].ty) {
+            return None;
+        } else {
+            return Some(place.local);
+        } 
+    }
+
+    None
+}
+
+/// Core procedure of finding definition sites of each argument of a fn call.
+/// It first examines a basic block backwards, and then recursively examines
+/// the BB's predecessors. It is similar to unsafe_def::find_unsafe_def_core.
 ///
 /// Inputs:
 /// @bb: Currently processed BasicBlock.
@@ -92,17 +106,18 @@ fn update_callee_arg_def_sites(def_id: DefId, index: usize, site: DefSite,
 /// @locals: Local (Place) that contributes to the arguments of the call.
 /// @visited: Already processed BB.
 /// @summary: Summary of the target function.
-fn find_arg_def(bb: BasicBlock, body: &Body<'tcx>, callee_def_id: DefId,
-    locals: &mut Vec<FxHashSet<Local>>, visited: &mut FxHashSet<BasicBlock>,
-    summary: &mut Summary) {
-    if visited.contains(&bb) || locals.is_empty() { return; }
-    visited.insert(bb);
+fn find_arg_def(bb: BasicBlock, body: &Body<'tcx>,
+                callee_def_id: DefId,
+                locals: &mut Vec<FxHashSet<Local>>,
+                visited: &mut FxHashSet<BasicBlock>,
+                summary: &mut Summary) {
+    if !visited.insert(bb) || locals.is_empty() { return; }
 
     let bbd = &body.basic_blocks()[bb];
     // Process Terminator
-    if let TerminatorKind::Call{func: Operand::Constant(_f), args, destination,
+    if let TerminatorKind::Call{func: Operand::Constant(f), args, destination,
         ..} = &bbd.terminator().kind {
-        if let Some(local) = get_ret_local(destination, body) {
+        if let Some(local) = get_non_empty_ret_local(destination, body) {
             // Found a definition site from a function call.
             for i in 0..locals.len() {
                 let arg_locals = &mut locals[i];
@@ -110,7 +125,7 @@ fn find_arg_def(bb: BasicBlock, body: &Body<'tcx>, callee_def_id: DefId,
                     arg_locals.remove(&local);
                     get_local_in_args(args, arg_locals);
                     update_callee_arg_def_sites(callee_def_id, i,
-                        DefSite::LocBB(bb.as_u32()), summary);
+                        def_site_from_call(f, bb.as_u32()), summary);
                 }
             }
         }
@@ -181,13 +196,14 @@ fn find_ret_def(loc: &Location, locals: &mut FxHashSet<Local>, body: &Body<'tcx>
     let stmt_num = bbd.statements.len();
     if start_index == stmt_num {
         // This means we need to examine the BB from the Terminator.
-        if let TerminatorKind::Call{func: _, args, destination, ..} =
-            &bbd.terminator().kind {
-            if let Some(local) = get_ret_local(destination, body) {
+        if let TerminatorKind::Call{func: Operand::Constant(f), args,
+            destination, ..} = &bbd.terminator().kind {
+            if let Some(local) = get_non_empty_ret_local(destination, body) {
                 if locals.contains(&local) {
                     locals.remove(&local);
                     get_local_in_args(args, locals);
-                    summary.ret_def_sites.insert(DefSite::LocBB(bb.as_u32()));
+                    summary.ret_def_sites.insert(
+                        def_site_from_call(f, bb.as_u32()));
                 }
             }
         }
