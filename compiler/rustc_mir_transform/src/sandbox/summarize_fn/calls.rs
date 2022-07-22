@@ -2,7 +2,6 @@
 //! argument of each callee, and def site(s) for the return value.
 
 use rustc_middle::mir::*;
-use rustc_middle::ty::{self};
 use rustc_hir::def_id::{DefId};
 use rustc_data_structures::fx::{FxHashSet, FxHashMap};
 use serde::{Deserialize, Serialize};
@@ -22,17 +21,18 @@ crate struct Callee {
     pub crate_name: String,
     /// DefId {DefIndex, CrateNum}
     id: (u32, u32),
-    /// The locations of the definition site for each argument. For example,
-    /// [[l0, l1], [l2, _2]] means the callee has two arguments, and the first
-    /// argument is computed from Terminator l0 and l1, and the second is from
-    /// Terminator l2 and local _2 (an argument or local var).
-    arg_def_sites: Vec<FxHashSet<DefSite>>,
+    /// The basic block of a call and def sites for each argument. For example,
+    /// (bb3, [[bb0, bb1], [bb2, _2]]) means the callee is called at BB3, and the
+    /// call has two arguments, and the first argument is computed from the
+    /// Terminator of BB0 and BB1, and the second is from the Terminator of bb2
+    /// and argument _2.
+    arg_defs: FxHashMap<u32, Vec<FxHashSet<DefSite>>>,
 }
 
 impl fmt::Debug for Callee {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{} (ID:{:?}; arg_def_sites: {:?}", self.fn_name, self.id,
-            self.arg_def_sites)
+        write!(f, "{} (ID:{:?}; arg_defs: {:?}", self.fn_name, self.id,
+            self.arg_defs)
     }
 }
 
@@ -44,52 +44,43 @@ impl fmt::Debug for Callee {
 /// HashMap<DefId, Callee> because serializing it will generate illegal JSON
 /// ("key must be a string").
 #[inline(always)]
-fn get_callee(callees: &mut Vec<Callee>, def_id: DefId) -> &mut Callee {
+fn get_callee(callees: &mut Vec<Callee>, def_id: DefId) -> Option<&mut Callee> {
     for callee in callees.iter_mut() {
         if break_def_id(def_id) == callee.id {
-            return callee;
+            return Some(callee);
         }
     }
 
-    panic!("Cannot find a callee");
+    None
 }
 
-/// Update Callee.arg_def_sites by adding a new DefSite.
+/// Update Callee.arg_defs by adding a new DefSite.
 ///
 /// Inputs:
-/// @def_id: DefId of the target callee.
-/// @index: Index of the argument in Callee.arg_def_sites.
+/// @call: The (BasicBlock, DefId) of the target callee.
+/// @index: Index of the argument in Callee.arg_defs.
 /// @site: A new DefSite
 /// @summary: Summary.
-fn update_callee_arg_def_sites(def_id: DefId, index: usize, site: DefSite,
-                               summary: &mut Summary) {
-    let callee = get_callee(&mut summary.callees, def_id);
-    // We use get_mut() instead of a simple [] to handle one corner case where
-    // a variadic callee is called more than once with different number of
-    // arguments AND during the init of Callee in analyze_fn(), the fewer-arg
-    // call is processed before the more-arg call(s). In this case,
-    // callee.arg_def_sites.len() would be smaller than index.  We expand the
-    // arg_def_sites dynamically to solve this problem.
-    match callee.arg_def_sites.get_mut(index) {
-        Some(sites) => { sites.insert(site); },
-        None => {
-            let mut sites = FxHashSet::default();
-            sites.insert(site);
-            callee.arg_def_sites.push(sites);
-        }
-    }
+#[inline(always)]
+fn update_arg_defs(call: (u32, DefId), index: usize, site: DefSite,
+                   summary: &mut Summary) {
+    let callee = get_callee(&mut summary.callees, call.1).unwrap();
+    // The next unwrap is safe as analyze_fn() processes each call.
+    let callee_arg_defs = callee.arg_defs.get_mut(&call.0).unwrap();
+    callee_arg_defs[index].insert(site);
 }
 
 /// Get the Local of the Place of the return value of a function call, if it
 /// does not return an empty tuple or diverts.
-fn get_non_empty_ret_local(ret: &Option<(Place<'tcx>, BasicBlock)>,
-                           body: &Body<'tcx>) -> Option<Local> {
+#[inline(always)]
+fn get_non_empty_ret(ret: &Option<(Place<'tcx>, BasicBlock)>, body: &Body<'tcx>)
+   -> Option<Local> {
     if let Some((place, _)) = ret {
         if is_empty_ty(body.local_decls[place.local].ty) {
             return None;
         } else {
             return Some(place.local);
-        } 
+        }
     }
 
     None
@@ -102,30 +93,42 @@ fn get_non_empty_ret_local(ret: &Option<(Place<'tcx>, BasicBlock)>,
 /// Inputs:
 /// @bb: Currently processed BasicBlock.
 /// @body: Body of the processed function.
-/// @callee_def_id: DefId of the currently processed callee.
+/// @call: (BasicBlock, DefId) of the currently processed call of a callee.
 /// @locals: Local (Place) that contributes to the arguments of the call.
 /// @visited: Already processed BB.
 /// @summary: Summary of the target function.
 fn find_arg_def(bb: BasicBlock, body: &Body<'tcx>,
-                callee_def_id: DefId,
+                call: (u32, DefId),
                 locals: &mut Vec<FxHashSet<Local>>,
                 visited: &mut FxHashSet<BasicBlock>,
                 summary: &mut Summary) {
     if !visited.insert(bb) || locals.is_empty() { return; }
 
     let bbd = &body.basic_blocks()[bb];
+    let bb_index = bb.as_u32();
     // Process Terminator
     if let TerminatorKind::Call{func: Operand::Constant(f), args, destination,
         ..} = &bbd.terminator().kind {
-        if let Some(local) = get_non_empty_ret_local(destination, body) {
-            // Found a definition site from a function call.
+        if let Some(call_ret) = get_non_empty_ret(destination, body) {
+            // Found a potential definition site from a function call.
             for i in 0..locals.len() {
                 let arg_locals = &mut locals[i];
-                if arg_locals.contains(&local) {
-                    arg_locals.remove(&local);
-                    get_local_in_args(args, arg_locals);
-                    update_callee_arg_def_sites(callee_def_id, i,
-                        def_site_from_call(f, bb.as_u32()), summary);
+                if arg_locals.contains(&call_ret) {
+                    arg_locals.remove(&call_ret);
+                    let def_site = def_site_from_call(f, bb_index);
+                    match def_site {
+                        DefSite::HeapAlloc(_) => {
+                            update_arg_defs(call, i, def_site, summary);
+                        },
+                        DefSite::NativeCall(_) => {
+                            get_local_in_args(args, arg_locals);
+                        },
+                        DefSite::OtherCall(_) => {
+                            get_local_in_args(args, arg_locals);
+                            update_arg_defs(call, i, def_site, summary);
+                        },
+                        _ => {}
+                    }
                 }
             }
         }
@@ -154,10 +157,10 @@ fn find_arg_def(bb: BasicBlock, body: &Body<'tcx>,
     let predecessors = &body.predecessors()[bb];
     for pbb in predecessors {
         if predecessors.len() > 1 {
-            find_arg_def(*pbb, body, callee_def_id, &mut locals.clone(),
+            find_arg_def(*pbb, body, call, &mut locals.clone(),
                          visited, summary);
         } else {
-            find_arg_def(*pbb, body, callee_def_id, locals, visited, summary);
+            find_arg_def(*pbb, body, call, locals, visited, summary);
         }
     }
 
@@ -169,8 +172,7 @@ fn find_arg_def(bb: BasicBlock, body: &Body<'tcx>,
             for arg in body.args_iter() {
                 if arg_locals.contains(&arg) {
                     arg_locals.remove(&arg);
-                    update_callee_arg_def_sites(callee_def_id, i,
-                        DefSite::Arg(arg.as_u32()), summary);
+                    update_arg_defs(call, i, DefSite::Arg(arg.as_u32()), summary);
                 }
             }
         }
@@ -195,15 +197,27 @@ fn find_ret_def(loc: &Location, locals: &mut FxHashSet<Local>, body: &Body<'tcx>
     let bbd = &body.basic_blocks()[bb];
     let stmt_num = bbd.statements.len();
     if start_index == stmt_num {
-        // This means we need to examine the BB from the Terminator.
+        // Examine the BB starting from the Terminator.
         if let TerminatorKind::Call{func: Operand::Constant(f), args,
             destination, ..} = &bbd.terminator().kind {
-            if let Some(local) = get_non_empty_ret_local(destination, body) {
+            if let Some(local) = get_non_empty_ret(destination, body) {
                 if locals.contains(&local) {
                     locals.remove(&local);
-                    get_local_in_args(args, locals);
-                    summary.ret_def_sites.insert(
-                        def_site_from_call(f, bb.as_u32()));
+                    let def_site = def_site_from_call(f, bb.as_u32());
+                    match def_site {
+                        DefSite::HeapAlloc(_) => {
+                            summary.ret_defs.0.insert(def_site);
+                        },
+                        DefSite::NativeCall(_) => {
+                            get_local_in_args(args, locals);
+                            // Should def_site be put to summary.ret_defs?
+                        },
+                        DefSite::OtherCall(_) => {
+                            get_local_in_args(args, locals);
+                            summary.ret_defs.0.insert(def_site);
+                        }
+                        _ => {}
+                    }
                 }
             }
         }
@@ -242,25 +256,33 @@ fn find_ret_def(loc: &Location, locals: &mut FxHashSet<Local>, body: &Body<'tcx>
     if bb.index() == 0 && !locals.is_empty() {
         body.args_iter().for_each(|arg|
             if locals.contains(&arg) {
-                summary.ret_def_sites.insert(DefSite::Arg(arg.as_u32()));
+                summary.ret_defs.1.push(DefSite::Arg(arg.as_u32()));
             });
     }
 }
 
 /// Check if the destination of a call is the return value of the caller.
-fn dest_to_ret(dest: &Option<(Place<'tcx>, BasicBlock)>, body: &Body<'tcx>)
+/// When this function is called, it is certain that dest is not an empty type.
+#[inline(always)]
+fn dest_to_ret(dest: &Option<(Place<'tcx>, BasicBlock)>)
     -> bool {
     if let Some((place, _)) = dest {
-        if place.local.as_u32() != 0 { return false; }
-
-        if let ty::Tuple(tys) = body.local_decls[place.local].ty.kind() {
-            if tys.len() == 0 { return false; }
-        }
-
+        if place.local.index() != 0 { return false; }
         return true;
     }
 
     false
+}
+
+/// Add a new pair of (bb, arg_defs) to a Calle's arg_defs.
+#[inline(always)]
+fn add_arg_def_slot(bb_arg_defs: &mut FxHashMap<u32, Vec::<FxHashSet<DefSite>>>,
+                    args: &Vec<Operand<'tcx>>, bb_index: u32) {
+    let mut arg_defs = Vec::with_capacity(args.len());
+    for _ in 0..args.len() {
+        arg_defs.push(FxHashSet::default());
+    }
+    bb_arg_defs.insert(bb_index, arg_defs);
 }
 
 /// Analyze a function to find:
@@ -269,49 +291,42 @@ fn dest_to_ret(dest: &Option<(Place<'tcx>, BasicBlock)>, body: &Body<'tcx>)
 pub(super) fn analyze_fn(body: &Body<'tcx>, summary: &mut Summary) {
     // BB that end with a call.
     let mut bb_with_calls = Vec::new();
-    // Callee functions that have been seen.
-    let mut recorded_callee = FxHashSet::<DefId>::default();
     // Location of return value's def stmt and Local that contribute to it.
-    let mut ret_def = FxHashMap::<Location, FxHashSet::<Local>>::default();
-    // Whether this function returns something (not "()").
-    let mut ret_none_empty = true;
-    if let ty::Tuple(tys) = body.return_ty().kind() {
-        if tys.len() == 0 { ret_none_empty = false ;}
-    };
+    let mut ret_defs = FxHashMap::<Location, FxHashSet::<Local>>::default();
     // Prepare data:
     // 1. BB with a call.
     // 2. BB with return value definition.
     for (bb, bbd) in body.basic_blocks().iter_enumerated() {
         let terminator = &bbd.terminator();
+        let bb_index = bb.as_u32();
         if let TerminatorKind::Call{func: Operand::Constant(f), args,
             destination, ..} = &terminator.kind {
-            // Prepare for Callee
             bb_with_calls.push(bb);
-            let def_id = get_fn_def_id(f);
-            if !recorded_callee.contains(&def_id) {
-                recorded_callee.insert(def_id);
-                let mut arg_def_sites = Vec::with_capacity(args.len());
-                if !args.is_empty() {
-                    for _ in 0..args.len() {
-                        arg_def_sites.push(FxHashSet::default());
-                    }
+            // Prepare arg_defs of Callee.
+            let callee_id = get_fn_def_id(f);
+            if !args.is_empty() {
+                if let Some(callee) = get_callee(&mut summary.callees, callee_id) {
+                    add_arg_def_slot(&mut callee.arg_defs, args, bb_index);
+                } else {
+                    let mut bb_arg_defs = FxHashMap::default();
+                    add_arg_def_slot(&mut bb_arg_defs, args, bb_index);
+                    summary.callees.push(Callee {
+                        fn_name: get_fn_name(callee_id),
+                        crate_name: get_crate_name(callee_id),
+                        id: break_def_id(callee_id),
+                        arg_defs: bb_arg_defs
+                    });
                 }
-                summary.callees.push(Callee {
-                    fn_name: get_fn_name(def_id),
-                    crate_name: get_crate_name(def_id),
-                    id: break_def_id(def_id),
-                    arg_def_sites: arg_def_sites
-                });
             }
 
             // Prepare for return value.
-            if ret_none_empty && dest_to_ret(destination, body) {
+            if !is_empty_ty(body.return_ty()) && dest_to_ret(destination) {
                 let loc = Location {
                     block: bb, statement_index: bbd.statements.len()
                 };
                 let mut locals = FxHashSet::<Local>::default();
                 get_local_in_args(args, &mut locals);
-                ret_def.insert(loc, locals);
+                ret_defs.insert(loc, locals);
             }
             continue;
         }
@@ -325,7 +340,7 @@ pub(super) fn analyze_fn(body: &Body<'tcx>, summary: &mut Summary) {
                         let loc = Location { block: bb, statement_index: i };
                         let mut locals = FxHashSet::<Local>::default();
                         get_local_in_rvalue(rvalue, &mut locals);
-                        ret_def.insert(loc, locals);
+                        ret_defs.insert(loc, locals);
                         // There should be at most one ret def ("_0 = ...")
                         // in a BB so it should be safe to break from here.
                         break;
@@ -346,24 +361,23 @@ pub(super) fn analyze_fn(body: &Body<'tcx>, summary: &mut Summary) {
             let mut locals = Vec::<FxHashSet::<Local>>::with_capacity(args.len());
             // Collect the initial Local for each argument.
             for arg in args {
-                let mut places = Vec::with_capacity(1);
+                let mut places = Vec::new();
                 let mut arg_locals = FxHashSet::default();
                 get_place_in_operand(arg, &mut places);
                 for place in places { arg_locals.insert(place.local); }
                 locals.push(arg_locals);
             }
             // Enter the core procedure of finding def sites for fn args.
-            find_arg_def(bb, body, get_fn_def_id(f), &mut locals, &mut visited, summary);
+            find_arg_def(bb, body, (bb.as_u32(), get_fn_def_id(f)), &mut locals,
+                         &mut visited, summary);
         } else {
             panic!("Not a function");
         }
     }
 
     // Process the return value to find its def sites.
-    for (loc, mut locals) in ret_def {
+    for (loc, mut locals) in ret_defs {
         let mut visited = FxHashSet::<BasicBlock>::default();
         find_ret_def(&loc, &mut locals, body, &mut visited, summary);
     }
 }
-
-

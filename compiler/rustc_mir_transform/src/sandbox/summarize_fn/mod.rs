@@ -91,16 +91,16 @@ pub struct Summary {
     id: (u32, u32),
     /// Callees used in this function. Key is DefId.
     crate callees: Vec<Callee>,
-    /// DefSite of Place in Return value
-    ret_def_sites: FxHashSet<DefSite>,
+    /// DefSite of Place in return value (CallSite, Arg)
+    ret_defs: (FxHashSet<DefSite>, Vec::<DefSite>),
     /// DefSite of Place in unsafe code
-    unsafe_def_sites: Option<FxHashSet<DefSite>>
+    unsafe_defs: Option<FxHashSet<DefSite>>
 }
 
 impl fmt::Debug for Summary {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}::{} {:?}:\nCallees: {:?}\nReturn: {:?}\n", self.crate_name,
-            self.fn_name, self.id, self.callees, self.ret_def_sites)
+            self.fn_name, self.id, self.callees, self.ret_defs)
     }
 }
 
@@ -113,7 +113,7 @@ pub fn summarize(tcx: TyCtxt<'tcx>, def_id: DefId, summaries: &mut Vec::<Summary
     let crate_name = get_crate_name(def_id);
     let fn_name = tcx.opt_item_name(def_id).unwrap().name.to_ident_string();
     if _DEBUG {
-        println!("[summarize_fn::calls]: Processing fn {}::{}", crate_name, fn_name);
+        println!("[summarize_fn::calls]: Processing fn {}", tcx.def_path_debug_str(def_id));
     }
 
     let mut summary = Summary {
@@ -121,8 +121,8 @@ pub fn summarize(tcx: TyCtxt<'tcx>, def_id: DefId, summaries: &mut Vec::<Summary
         crate_name: crate_name,
         id: break_def_id(def_id),
         callees: Vec::new(),
-        ret_def_sites: FxHashSet::default(),
-        unsafe_def_sites: None
+        ret_defs: (FxHashSet::default(), Vec::new()),
+        unsafe_defs: None
     };
 
     let body = tcx.optimized_mir(def_id);

@@ -2,11 +2,9 @@
 //! unsafe code.
 
 use rustc_middle::mir::*;
-use rustc_middle::ty::{self};
 use rustc_data_structures::fx::{FxHashSet,FxHashMap};
 
 use crate::sandbox::utils::*;
-use crate::sandbox::database::*;
 use crate::sandbox::debug::*;
 use super::{DefSite,Summary};
 
@@ -124,24 +122,6 @@ fn get_place_in_terminator(body: &'tcx Body<'tcx>, terminator: &Terminator<'tcx>
     }
 }
 
-/// Check if a function is one that allocates a heap object, e.g, Vec::new().
-fn is_heap_alloc(func: &Constant<'tcx>) -> bool {
-    if let ty::FnDef(def_id, _) = *func.literal.ty().kind() {
-        let name = ty::tls::with(|tcx| {
-            tcx.opt_item_name(def_id).unwrap().name.to_ident_string()});
-        // The name ignors the crate and module and struct and only keeps
-        // the final method, e.g., "new" of "Box::<i32>::new". Perhaps we
-        // should check where a method is from; we would otherwise run the
-        // risk of introducing false positives.
-        if HEAP_ALLOC.contains(&name) {
-            if _DEBUG { println!("[Heap Alloc]: {:?}", func); }
-            return true;
-        }
-    }
-
-    false
-}
-
 /// Collect unsafe allocation sites of an unsafe function. It does not need to
 /// analyze the data flow of the function; instead, it only needs to collect all
 /// fn arguments and return values of function calls.
@@ -207,28 +187,34 @@ fn find_unsafe_def_core(place_locals: &mut FxHashSet<Local>,
         if let TerminatorKind::Call{func: Operand::Constant(f), args,
                                     destination, ..} = &bbd.terminator().kind {
             if let Some((place, _)) = destination {
-                // There are three cases:
-                // 1. heap allocation call such as Vec::new()
-                // 2. non-native-lib fn call
-                // 3. native-lib fn call Vec::as_ptr()
                 if place_locals.contains(&place.local) {
                     // Found a definition site for an unsafe Place.
-                    results.insert(def_site_from_call(f, bb.as_u32()));
-                    if !is_heap_alloc(f) {
-                        // Get Place used in args of the call.
-                        let mut place_in_args = Vec::<Place<'tcx>>::new();
-                        args.iter().for_each(
-                            |arg| get_place_in_operand(arg, &mut place_in_args));
-                        // Can the next loop be rewritten in a functional style?
-                        // Cannot use for_each as it requires a Fn that returns '()'.
-                        for place in place_in_args {
-                            place_locals.insert(place.local);
-                        }
-
-                        // TODO: We need distinguish the 2nd and 3rd conditions
-                        // because we do not process std libs.
+                    place_locals.remove(&place.local);
+                    let def_site = def_site_from_call(f, bb.as_u32());
+                    match def_site {
+                        DefSite::HeapAlloc(_) => {
+                            results.insert(def_site);
+                            // Question: Do we need to handle argument(s) to
+                            // a heap allocation, e.g., Vec::from_raw_parts()?
+                        },
+                        DefSite::NativeCall(_) => {
+                            // Since we do not analyze native functions, we need
+                            // conservatively assume that all arguments to such
+                            // a function contribute to the return value.
+                            get_local_in_args(args, place_locals);
+                            // No need to add this def_site to results. Or we
+                            // can add only the def_site without adding args,
+                            // and wait for WPA to process args.
+                        },
+                        DefSite::OtherCall(_) => {
+                            // For a normal call, we only need to track args
+                            // that contribute to the return value. However,
+                            // we do not know which arg contributes until WPA.
+                            // So here we do not track args and wait for WPA.
+                            results.insert(def_site);
+                        },
+                        _ => {}
                     }
-                    place_locals.remove(&destination.unwrap().0.local);
                 }
             }
         }
@@ -242,13 +228,13 @@ fn find_unsafe_def_core(place_locals: &mut FxHashSet<Local>,
             match &stmt.kind {
                 StatementKind::Assign(box (place, rvalue)) => {
                     if place_locals.contains(&place.local) {
+                        place_locals.remove(&place.local);
                         // Put the Place in rvalue to the unsafe Place set.
                         let mut place_in_rvalue = Vec::<Place<'tcx>>::new();
                         get_place_in_rvalue(&rvalue, &mut place_in_rvalue);
                         for place in place_in_rvalue {
                             place_locals.insert(place.local);
                         }
-                        place_locals.remove(&place.local);
                     }
                 },
                 _  => {
@@ -381,6 +367,6 @@ pub fn analyze_fn(body: & Body<'tcx>, summary: &mut Summary) {
     }
 
     if !results.is_empty() {
-        summary.unsafe_def_sites = Some(results);
+        summary.unsafe_defs = Some(results);
     }
 }

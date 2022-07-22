@@ -26,6 +26,10 @@ lazy_static!{
 // TODO: The currently list may be incomplete. A thorough study is needed.
 lazy_static!{
     pub static ref HEAP_ALLOC: FxHashSet<String> = {
+        // The name ignors the crate and module and struct and only keeps the
+        // final method, e.g., "new" of "Box::<i32>::new". Perhaps when query
+        // this set, we should check where a method is from; we would otherwise
+        // run the risk of introducing false positives.
         let allocs = vec![
             "new",
             "new_in",
