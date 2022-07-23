@@ -121,7 +121,9 @@ pub fn wpa(main_summaries: Vec<Summary>) {
     if _DEBUG { debug(main_summaries); return; }
 
     let dep_summaries = read_summaries();
-    if dep_summaries.is_err() { return; }
+    if dep_summaries.is_err() {
+        panic!("Failed to read in function summary files of dependent crates");
+    }
 
     let mut all_summaries = dep_summaries.unwrap();
     all_summaries.push(main_summaries);

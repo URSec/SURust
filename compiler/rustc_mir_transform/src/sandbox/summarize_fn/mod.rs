@@ -18,7 +18,6 @@ use rustc_data_structures::fx::{FxHashSet};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::fs;
-use std::path::Path;
 
 use super::utils::*;
 use calls::*;
@@ -166,20 +165,22 @@ pub fn is_main(tcx: TyCtxt<'tcx>, summary: &Summary) -> bool {
 }
 
 /// Write the summaries of a crate to a temporary file.
+//
+// Jie Zhou: For some unknown reason(s), besides the directory for the
+// crates used in the target app, there may be extra directories to be
+// created and those directories contain files named probe{1,2,3..}.
+// Some probe* files are empty. Don't know why they are generated and
+// what they are exactly.
 pub fn write_summaries_to_file(summaries: &Vec<Summary>) {
     let local_crate_name = get_local_crate_name();
-    if ignore_build_crate(&local_crate_name) { return; }
+    if ignore_build_crate(&local_crate_name) {
+        return;
+    }
 
     let dir = get_summary_dir();
-    if !Path::new(&dir).exists() {
-        // Jie Zhou: For some unknown reason(s), besides the directory for the
-        // crates used in the target app, there may be extra directories to be
-        // created and those directories contain files named probe{1,2,3..}.
-        // Some probe* files are empty. Don't know why they are generated and
-        // what they are exactly.
-        fs::create_dir(&dir).
-            expect(&(["Failed to mkdir for crate ", &local_crate_name].join("")));
-    }
+    // Create the directory for the summary files of all dependent crates.
+    // No need to sync. It is harmless to fail for "File exists".
+    let _ = fs::create_dir(&dir);
 
     // Serialize summaries to a string and write the string to a file.
     let serialized = serde_json::to_string(&summaries).unwrap();
