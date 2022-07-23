@@ -308,20 +308,19 @@ fn analyze_fn(tcx: TyCtxt<'tcx>, body: &Body<'tcx>, summary: &mut Summary) {
             bb_with_calls.push(bb);
             // Prepare arg_defs of Callee.
             let callee_id = get_fn_def_id(f);
-            if !args.is_empty() {
-                if let Some(callee) = get_callee(&mut summary.callees, callee_id) {
-                    add_arg_def_slot(&mut callee.arg_defs, args, bb_index);
-                } else {
-                    let mut bb_arg_defs = FxHashMap::default();
-                    add_arg_def_slot(&mut bb_arg_defs, args, bb_index);
-                    summary.callees.push(Callee {
-                        fn_id: get_fn_fingerprint(tcx, callee_id),
-                        fn_name: get_fn_name(callee_id),
-                        crate_name: get_crate_name(callee_id),
-                        def_id: break_def_id(callee_id),
-                        arg_defs: bb_arg_defs
-                    });
-                }
+            if let Some(callee) = get_callee(&mut summary.callees, callee_id) {
+                // Has seen a call to this callee before.
+                add_arg_def_slot(&mut callee.arg_defs, args, bb_index);
+            } else {
+                let mut bb_arg_defs = FxHashMap::default();
+                add_arg_def_slot(&mut bb_arg_defs, args, bb_index);
+                summary.callees.push(Callee {
+                    fn_id: get_fn_fingerprint(tcx, callee_id),
+                    fn_name: get_fn_name(callee_id),
+                    crate_name: get_crate_name(callee_id),
+                    def_id: break_def_id(callee_id),
+                    arg_defs: bb_arg_defs
+                });
             }
 
             // Prepare for return value.
