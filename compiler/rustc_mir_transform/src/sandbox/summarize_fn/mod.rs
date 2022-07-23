@@ -81,14 +81,31 @@ impl fmt::Debug for DefSite {
     }
 }
 
+/// The def_id::DefPathHash, i.e., Fingerprint, of a function.
+/// This is not as beautiful as it should be: Ideally we should directly use
+/// DefPathHash instead of the inner representation. However, we would then
+/// have to implement Serialize & Deserialize for DefPathHash. Serialize is
+/// usually easy to implement but Deserialize is more complex. This is similar
+/// to why we use u32 a lot to represent BasicBlock and def_id's components.
+/// We should fix these issues later.
+#[derive(Serialize, Deserialize, Hash, Eq, Copy, Clone)]
+crate struct FnID(crate (u64, u64));
+
+impl PartialEq for FnID {
+    fn eq(&self, other: &FnID) -> bool {
+        return self.0 == other.0;
+    }
+}
 
 /// Summary of a function.
 #[derive(Serialize, Deserialize)]
 pub struct Summary {
+    /// The function's unique ID (fingerprint).
+    crate fn_id: FnID,
     pub fn_name: String,
     pub crate_name: String,
     /// DefId
-    id: (u32, u32),
+    def_id: (u32, u32),
     /// Callees used in this function. Key is DefId.
     crate callees: Vec<Callee>,
     /// DefSite of Place in return value (CallSite, Arg)
@@ -100,7 +117,7 @@ pub struct Summary {
 impl fmt::Debug for Summary {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}::{} {:?}:\nCallees: {:?}\nReturn: {:?}\n", self.crate_name,
-            self.fn_name, self.id, self.callees, self.ret_defs)
+            self.fn_name, self.def_id, self.callees, self.ret_defs)
     }
 }
 
@@ -117,9 +134,10 @@ pub fn summarize(tcx: TyCtxt<'tcx>, def_id: DefId, summaries: &mut Vec::<Summary
     }
 
     let mut summary = Summary {
+        fn_id: get_fn_fingerprint(tcx, def_id),
         fn_name: fn_name,
         crate_name: crate_name,
-        id: break_def_id(def_id),
+        def_id: break_def_id(def_id),
         callees: Vec::new(),
         ret_defs: (FxHashSet::default(), Vec::new()),
         unsafe_defs: None
@@ -128,7 +146,7 @@ pub fn summarize(tcx: TyCtxt<'tcx>, def_id: DefId, summaries: &mut Vec::<Summary
     let body = tcx.optimized_mir(def_id);
 
     // Analyze calls and return values.
-    calls::analyze_fn(body, &mut summary);
+    calls::analyze_fn(tcx, body, &mut summary);
 
     // Find the def sites of Place used in unsafe code.
     unsafe_def::analyze_fn(body, &mut summary);
@@ -142,7 +160,7 @@ pub fn is_main(tcx: TyCtxt<'tcx>, summary: &Summary) -> bool {
 
     // Check signature. There might be other main fn which have different
     // signatures than the main() in the application itself.
-    let body = tcx.optimized_mir(create_defid(summary.id));
+    let body = tcx.optimized_mir(assemble_def_id(summary.def_id));
     if body.arg_count == 0 && is_empty_ty(body.return_ty()) { return true; }
     return false;
 }

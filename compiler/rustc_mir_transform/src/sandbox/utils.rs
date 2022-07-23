@@ -2,13 +2,13 @@
 
 use rustc_middle::mir::*;
 use rustc_middle::ty::{self, TyCtxt, Ty};
-use rustc_hir::def_id::{DefId, DefIndex, CrateNum, LOCAL_CRATE};
+use rustc_hir::def_id::{DefId,DefIndex,CrateNum,LOCAL_CRATE};
 use rustc_data_structures::fx::{FxHashSet};
 use nix::unistd::getppid;
 
 use super::database::*;
 use super::debug::*;
-use super::summarize_fn::{DefSite};
+use super::summarize_fn::{DefSite,FnID};
 
 #[inline(always)]
 crate fn get_crate_name(def_id: DefId) -> String {
@@ -202,9 +202,9 @@ crate fn break_def_id(def_id: DefId) -> (u32, u32) {
     (def_id.index.as_u32(), def_id.krate.as_u32())
 }
 
-/// Create a DefId based on two u32 as DefIndex and CrateNum.
+/// Create a DefId based on two u32 as DefIndex and CrateNum, respectively.
 #[inline(always)]
-crate fn create_defid((index, krate): (u32, u32)) -> DefId {
+crate fn assemble_def_id((index, krate): (u32, u32)) -> DefId {
     DefId {
         index: DefIndex::from_u32(index),
         krate: CrateNum::from_u32(krate)
@@ -232,4 +232,10 @@ crate fn def_site_from_call(f: &Constant<'tcx>, bb_index: u32) -> DefSite {
     }
 
     panic!("Not a function");
+}
+
+/// Get the inner value of DefPathHash (Fingerprint) of a function.
+#[inline(always)]
+crate fn get_fn_fingerprint(tcx: TyCtxt<'tcx>, def_id: DefId) -> FnID {
+    FnID(tcx.def_path_hash(def_id).0.as_value())
 }

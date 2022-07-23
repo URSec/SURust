@@ -348,7 +348,7 @@ fn find_unsafe_def(body: &Body<'tcx>, results: &mut FxHashSet<DefSite>) {
 }
 
 /// Entrance of this module.
-pub fn analyze_fn(body: & Body<'tcx>, summary: &mut Summary) {
+pub(super) fn analyze_fn(body: & Body<'tcx>, summary: &mut Summary) {
     if _DEBUG {
         let def_id = body.source.def_id();
         println!("[summarize_fn::analyze_fn]: Processing function {}:{}",

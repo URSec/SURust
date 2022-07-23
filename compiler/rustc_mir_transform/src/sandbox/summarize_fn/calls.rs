@@ -2,13 +2,14 @@
 //! argument of each callee, and def site(s) for the return value.
 
 use rustc_middle::mir::*;
+use rustc_middle::ty::{TyCtxt};
 use rustc_hir::def_id::{DefId};
 use rustc_data_structures::fx::{FxHashSet, FxHashMap};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
 use crate::sandbox::utils::*;
-use super::{DefSite,Summary};
+use super::{DefSite, Summary, FnID};
 
 static _DEBUG: bool = false;
 
@@ -17,13 +18,15 @@ static _DEBUG: bool = false;
 /// we do not need to distinguish each call to the same callee.
 #[derive(Serialize, Deserialize)]
 crate struct Callee {
+    /// Unique ID of a function that is stable across compilation sessions.
+    crate fn_id: FnID,
     pub fn_name: String,
     pub crate_name: String,
-    /// DefId {DefIndex, CrateNum}
-    id: (u32, u32),
+    /// DefId (DefIndex, CrateNum)
+    crate def_id: (u32, u32),
     /// The basic block of a call and def sites for each argument. For example,
-    /// (bb3, [[bb0, bb1], [bb2, _2]]) means the callee is called at BB3, and the
-    /// call has two arguments, and the first argument is computed from the
+    /// (bb3, [[bb0, bb1], [bb2, _2]]) means the callee is called at BB3, and
+    /// the call has two arguments, and the first argument is computed from the
     /// Terminator of BB0 and BB1, and the second is from the Terminator of bb2
     /// and argument _2.
     arg_defs: FxHashMap<u32, Vec<FxHashSet<DefSite>>>,
@@ -31,7 +34,7 @@ crate struct Callee {
 
 impl fmt::Debug for Callee {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{} (ID:{:?}; arg_defs: {:?}", self.fn_name, self.id,
+        write!(f, "{} (ID:{:?}; arg_defs: {:?}", self.fn_name, self.def_id,
             self.arg_defs)
     }
 }
@@ -46,7 +49,7 @@ impl fmt::Debug for Callee {
 #[inline(always)]
 fn get_callee(callees: &mut Vec<Callee>, def_id: DefId) -> Option<&mut Callee> {
     for callee in callees.iter_mut() {
-        if break_def_id(def_id) == callee.id {
+        if break_def_id(def_id) == callee.def_id {
             return Some(callee);
         }
     }
@@ -288,7 +291,8 @@ fn add_arg_def_slot(bb_arg_defs: &mut FxHashMap<u32, Vec::<FxHashSet<DefSite>>>,
 /// Analyze a function to find:
 /// 1. Its callees and the definition sites of the arguments of each callee.
 /// 2. The definition sites for its return value, if there is one.
-pub(super) fn analyze_fn(body: &Body<'tcx>, summary: &mut Summary) {
+pub(super)
+fn analyze_fn(tcx: TyCtxt<'tcx>, body: &Body<'tcx>, summary: &mut Summary) {
     // BB that end with a call.
     let mut bb_with_calls = Vec::new();
     // Location of return value's def stmt and Local that contribute to it.
@@ -311,9 +315,10 @@ pub(super) fn analyze_fn(body: &Body<'tcx>, summary: &mut Summary) {
                     let mut bb_arg_defs = FxHashMap::default();
                     add_arg_def_slot(&mut bb_arg_defs, args, bb_index);
                     summary.callees.push(Callee {
+                        fn_id: get_fn_fingerprint(tcx, callee_id),
                         fn_name: get_fn_name(callee_id),
                         crate_name: get_crate_name(callee_id),
-                        id: break_def_id(callee_id),
+                        def_id: break_def_id(callee_id),
                         arg_defs: bb_arg_defs
                     });
                 }
