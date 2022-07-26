@@ -5,39 +5,11 @@ use rustc_middle::mir::*;
 use rustc_middle::ty::{TyCtxt};
 use rustc_hir::def_id::{DefId};
 use rustc_data_structures::fx::{FxHashSet, FxHashMap};
-use serde::{Deserialize, Serialize};
-use std::fmt;
 
 use crate::sandbox::utils::*;
-use super::{DefSite, Summary, FnID};
+use super::{DefSite, Summary, Callee};
 
 static _DEBUG: bool = false;
-
-/// Information of a callee used by a function. Speficially, we collect the
-/// allocation/declaration sites for all the arguments of a callee. Note that
-/// we do not need to distinguish each call to the same callee.
-#[derive(Serialize, Deserialize)]
-crate struct Callee {
-    /// Unique ID of a function that is stable across compilation sessions.
-    crate fn_id: FnID,
-    pub fn_name: String,
-    pub crate_name: String,
-    /// DefId (DefIndex, CrateNum)
-    crate def_id: (u32, u32),
-    /// The basic block of a call and def sites for each argument. For example,
-    /// (bb3, [[bb0, bb1], [bb2, _2]]) means the callee is called at BB3, and
-    /// the call has two arguments, and the first argument is computed from the
-    /// Terminator of BB0 and BB1, and the second is from the Terminator of bb2
-    /// and argument _2.
-    arg_defs: FxHashMap<u32, Vec<FxHashSet<DefSite>>>,
-}
-
-impl fmt::Debug for Callee {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{} (ID:{:?}; arg_defs: {:?}", self.fn_name, self.def_id,
-            self.arg_defs)
-    }
-}
 
 /// Get the target Callee by DefId from the vector of Callee used by a fn.
 ///

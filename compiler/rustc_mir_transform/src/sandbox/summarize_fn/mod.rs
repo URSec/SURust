@@ -14,13 +14,12 @@ crate mod unsafe_def;
 
 use rustc_middle::ty::{TyCtxt};
 use rustc_hir::def_id::{DefId};
-use rustc_data_structures::fx::{FxHashSet};
+use rustc_data_structures::fx::{FxHashSet, FxHashMap};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::fs;
 
 use super::utils::*;
-use calls::*;
 
 static _DEBUG: bool = false;
 
@@ -44,7 +43,7 @@ static _DEBUG: bool = false;
 /// and the analysis should go to query what contribute(s) to the return value
 /// of func. Note that there is no need to analyze the arguments of func in WPA
 /// because unsafe_def has done it.
-#[derive(Hash, Eq, Serialize, Deserialize)]
+#[derive(Hash, Eq, Serialize, Deserialize, Copy, Clone)]
 crate enum DefSite {
     // Since a call is always a Terminator, we use its BB's index as its location.
     /// Location of a call to a heap allocation.
@@ -81,6 +80,7 @@ impl fmt::Debug for DefSite {
 }
 
 /// The def_id::DefPathHash, i.e., Fingerprint, of a function.
+///
 /// This is not as beautiful as it should be: Ideally we should directly use
 /// DefPathHash instead of the inner representation. However, we would then
 /// have to implement Serialize & Deserialize for DefPathHash. Serialize is
@@ -96,6 +96,31 @@ impl PartialEq for FnID {
     }
 }
 
+/// Information of a callee used by a function. Speficially, we collect the
+/// allocation/declaration sites for all the arguments of a callee.
+#[derive(Serialize, Deserialize)]
+crate struct Callee {
+    /// Unique ID of a function that is stable across compilation sessions.
+    crate fn_id: FnID,
+    pub fn_name: String,
+    pub crate_name: String,
+    /// DefId (DefIndex, CrateNum)
+    crate def_id: (u32, u32),
+    /// The basic block of a call and def sites for each argument. For example,
+    /// (bb3, [[bb0, bb1], [bb2, _2]]) means the callee is called at BB3, and
+    /// the call has two arguments, and the first argument is computed from the
+    /// Terminator of BB0 and BB1, and the second is from the Terminator of bb2
+    /// and argument _2.
+    crate arg_defs: FxHashMap<u32, Vec<FxHashSet<DefSite>>>,
+}
+
+impl fmt::Debug for Callee {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{} (ID:{:?}; arg_defs: {:?}", self.fn_name, self.def_id,
+            self.arg_defs)
+    }
+}
+
 /// Summary of a function.
 #[derive(Serialize, Deserialize)]
 pub struct Summary {
@@ -108,9 +133,20 @@ pub struct Summary {
     /// Callees used in this function. Key is DefId.
     crate callees: Vec<Callee>,
     /// DefSite of Place in return value (CallSite, Arg)
-    ret_defs: (FxHashSet<DefSite>, Vec::<DefSite>),
+    crate ret_defs: (FxHashSet<DefSite>, Vec::<DefSite>),
     /// DefSite of Place in unsafe code
-    unsafe_defs: Option<FxHashSet<DefSite>>
+    crate unsafe_defs: Option<FxHashSet<DefSite>>
+}
+
+impl Summary {
+    crate fn get_callee(&self, fn_id: &FnID) -> &Callee {
+        for callee in &self.callees {
+            if callee.fn_id == *fn_id {
+                return callee;
+            }
+        }
+        panic!("Cannot find the target callee");
+    }
 }
 
 impl fmt::Debug for Summary {
