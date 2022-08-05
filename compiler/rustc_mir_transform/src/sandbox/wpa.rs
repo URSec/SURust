@@ -7,6 +7,7 @@ use std::fs::{read_dir, read_to_string, remove_dir_all};
 use rustc_data_structures::fx::{FxHashMap, FxHashSet};
 use std::{fmt, io};
 use std::collections::VecDeque;
+use std::process::{Command, Stdio};
 
 use super::summarize_fn::{Summary, FnID, DefSite};
 use super::utils::*;
@@ -60,12 +61,37 @@ impl PartialEq for GlobalDefSite {
     }
 }
 
+/// Count the number of summary files in the temporary summary directory.
+/// Essentiall, it gets the result of `ls | wc -l` and converts it to an u32.
+#[inline(always)]
+fn curr_dep_crate_num(summary_dir: &str) -> io::Result<u32> {
+    let ls = Command::new("ls").arg(summary_dir).stdout(Stdio::piped()).spawn()?;
+    let wc = Command::new("wc").arg("-l").stdin(ls.stdout.unwrap()).output()?;
+    Ok(String::from_utf8(wc.stdout).unwrap().as_str().trim().parse::<u32>().unwrap())
+}
+
 /// Read the fn summaries of each crate from the summary files, and then put
 /// them to a HashMap for later use.
 fn read_summaries() -> io::Result<FxHashMap<FnID, Summary>> {
+    let summary_dir = get_summary_dir();
+    // Check if all dependent summaries are ready.
+    // Run the Python script that counts the number of compiled depdency crates.
+    let dep_crate_num = Command::new("../../misc/scripts/compiled_dep_crates.py")
+                        .output().unwrap().stdout;
+    let dep_crate_num = String::from_utf8(dep_crate_num).unwrap().as_str().trim()
+                        .parse::<u32>().unwrap();
+    while let Ok(num) = curr_dep_crate_num(&summary_dir)  {
+        if num == dep_crate_num {
+            break;
+        }
+        // Busy waiting
+    }
+
+    println!("# of dependency crates: {}", dep_crate_num);
+
     let mut dep_summaries = FxHashMap::<FnID, Summary>::default();
     // Collect summaries.
-    for summaries in read_dir(get_summary_dir())? {
+    for summaries in read_dir(summary_dir)? {
         let summaries_str = read_to_string(summaries?.path())?;
         let summaries_vec = serde_json::from_str::<Vec<Summary>>(&summaries_str)?;
         for summary in summaries_vec {

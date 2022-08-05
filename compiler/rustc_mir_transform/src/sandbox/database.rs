@@ -11,10 +11,14 @@ lazy_static!{
             "test",
             "backtrace",
             "unwind",
-            "panic_abort", "panic_unwind",
+            "panic_unwind",
+            "panic_abort",
             "proc_macro",
-            // There are several others in "rust/library". Do we need to
-            // include all of them?
+            "rustc_std_workspace_alloc",
+            "rustc_std_workspace_core",
+            "rustc_std_workspace_std",
+            "compiler_builtins",
+            // Any others?
         ];
 
         libs.into_iter().map(|x| x.to_string()).collect()

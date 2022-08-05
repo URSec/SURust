@@ -324,7 +324,6 @@ pub fn collect_crate_mono_items(
     (visited.into_inner(), inlining_map.into_inner())
 }
 
-
 /// Sandbox unsafe Rust.
 ///
 /// 1. Summarize each function in the current crate.
@@ -356,7 +355,7 @@ fn sandbox_unsafe(tcx: TyCtxt<'tcx>, visited: &MTLock<FxHashSet<MonoItem<'tcx>>>
     assert!(main_num < 2, "There are more than one main()");
     if main_num == 0 {
         // Write the summaries of a dependency crate to a temporal file.
-        summarize_fn::write_summaries_to_file(&summaries);
+        summarize_fn::write_summaries_to_file(tcx, &summaries);
     } else {
         // This is the main crate.
         // Read all the summaries from crates and do analysis on them.

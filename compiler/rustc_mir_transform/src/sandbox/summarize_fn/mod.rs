@@ -13,7 +13,7 @@ crate mod calls;
 crate mod unsafe_def;
 
 use rustc_middle::ty::{TyCtxt};
-use rustc_hir::def_id::{DefId};
+use rustc_hir::def_id::{DefId, LOCAL_CRATE};
 use rustc_data_structures::fx::{FxHashSet, FxHashMap};
 use serde::{Deserialize, Serialize};
 use std::fmt;
@@ -207,7 +207,7 @@ pub fn is_main(tcx: TyCtxt<'tcx>, summary: &Summary) -> bool {
 // created and those directories contain files named probe{1,2,3..}.
 // Some probe* files are empty. Don't know why they are generated and
 // what they are exactly.
-pub fn write_summaries_to_file(summaries: &Vec<Summary>) {
+pub fn write_summaries_to_file(tcx: TyCtxt<'tcx>, summaries: &Vec<Summary>) {
     let local_crate_name = get_local_crate_name();
     if ignore_build_crate(&local_crate_name) {
         return;
@@ -220,7 +220,9 @@ pub fn write_summaries_to_file(summaries: &Vec<Summary>) {
 
     // Serialize summaries to a string and write the string to a file.
     let serialized = serde_json::to_string(&summaries).unwrap();
-    fs::write(dir + "/" + &local_crate_name, &serialized).
+    let output_file = dir + "/" + &local_crate_name + "-" +
+        &tcx.stable_crate_id(LOCAL_CRATE).to_u64().to_string();
+    fs::write(output_file.as_str(), &serialized).
         expect("Failed to write summaries");
 
      if _DEBUG {
