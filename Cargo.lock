@@ -2484,6 +2484,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e4a24736216ec316047a1fc4252e27dabb04218aa4a3f37c6e7ddbf1f9782b54"
 
 [[package]]
+name = "nix"
+version = "0.23.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9f866317acbd3a240710c63f065ffb1e4fd466259045ccb504130b7f668f35c6"
+dependencies = [
+ "bitflags",
+ "cc",
+ "cfg-if 1.0.0",
+ "libc",
+ "memoffset",
+]
+
+[[package]]
 name = "nom"
 version = "7.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4216,6 +4229,8 @@ version = "0.0.0"
 dependencies = [
  "coverage_test_macros",
  "itertools",
+ "lazy_static",
+ "nix",
  "rustc_ast",
  "rustc_attr",
  "rustc_const_eval",
@@ -4230,6 +4245,8 @@ dependencies = [
  "rustc_span",
  "rustc_target",
  "rustc_trait_selection",
+ "serde",
+ "serde_json",
  "smallvec",
  "tracing",
 ]
@@ -4242,6 +4259,7 @@ dependencies = [
  "rustc_hir",
  "rustc_index",
  "rustc_middle",
+ "rustc_mir_transform",
  "rustc_session",
  "rustc_span",
  "rustc_target",

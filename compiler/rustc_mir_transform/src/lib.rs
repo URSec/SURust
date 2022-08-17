@@ -16,6 +16,8 @@
 extern crate tracing;
 #[macro_use]
 extern crate rustc_middle;
+#[macro_use]
+extern crate lazy_static;
 
 use required_consts::RequiredConstsVisitor;
 use rustc_const_eval::util;
@@ -88,6 +90,8 @@ mod simplify_comparison_integral;
 mod simplify_try;
 mod uninhabited_enum_branching;
 mod unreachable_prop;
+
+pub mod sandbox;
 
 use rustc_const_eval::transform::check_consts::{self, ConstCx};
 use rustc_const_eval::transform::promote_consts;

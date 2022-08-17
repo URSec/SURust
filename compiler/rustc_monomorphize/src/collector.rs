@@ -205,6 +205,9 @@ use std::iter;
 use std::ops::Range;
 use std::path::PathBuf;
 
+// Sandboxing
+use rustc_mir_transform::sandbox::{summarize_fn, wpa};
+
 #[derive(PartialEq)]
 pub enum MonoItemCollectionMode {
     Eager,
@@ -358,7 +361,50 @@ pub fn collect_crate_mono_items(
         });
     }
 
+    // Sandbox unsafe Rust.
+    sandbox_unsafe(tcx, &visited);
+
     (visited.into_inner(), inlining_map.into_inner())
+}
+
+/// Sandbox unsafe Rust.
+///
+/// 1. Summarize each function in the current crate.
+/// 2. Write the summaries to a file.
+/// 3. Let the crate with main() be the leader process to combine all the
+///    summaries, and then to analyze the combined summary.
+/// 4. Other processes wait for the final summary, and then analyze and transform.
+fn sandbox_unsafe<'tcx>(tcx: TyCtxt<'tcx>,
+                        visited: &MTLock<FxHashSet<MonoItem<'tcx>>>) {
+    let mut summaries = Vec::<summarize_fn::Summary>::new();
+    // rustc actually only keeps one copy of MIR for all the MonoItem that are
+    // from the same function with generic type parameter(s).
+    let mut processed = FxHashSet::default();
+    for item in visited.get_ref() {
+        match item {
+            MonoItem::Fn(instance) => {
+                let def_id = instance.def_id();
+                if processed.insert(def_id) {
+                    summarize_fn::summarize(tcx, def_id, &mut summaries);
+                }
+            },
+            _ => {}
+        }
+    }
+
+    let mut main_num = 0;
+    for summary in &summaries {
+        if summarize_fn::is_main(tcx, summary) { main_num += 1; }
+    }
+    assert!(main_num < 2, "There are more than one main()");
+    if main_num == 0 {
+        // Write the summaries of a dependency crate to a temporal file.
+        summarize_fn::write_summaries_to_file(tcx, &summaries);
+    } else {
+        // This is the main crate.
+        // Read all the summaries from crates and do analysis on them.
+        wpa::wpa(summaries);
+    }
 }
 
 // Find all non-generic items by walking the HIR. These items serve as roots to

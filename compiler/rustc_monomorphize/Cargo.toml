@@ -16,3 +16,4 @@ rustc_middle = { path = "../rustc_middle" }
 rustc_session = { path = "../rustc_session" }
 rustc_span = { path = "../rustc_span" }
 rustc_target = { path = "../rustc_target" }
+rustc_mir_transform = { path = "../rustc_mir_transform" }
