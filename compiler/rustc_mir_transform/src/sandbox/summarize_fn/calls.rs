@@ -2,7 +2,7 @@
 //! argument of each callee, and def site(s) for the return value.
 
 use rustc_middle::mir::*;
-use rustc_middle::ty::{TyCtxt};
+use rustc_middle::ty::{self, TyCtxt, InstanceDef};
 use rustc_hir::def_id::{DefId};
 use rustc_data_structures::fx::{FxHashSet, FxHashMap};
 
@@ -245,6 +245,123 @@ fn add_arg_def_slot<'tcx>(
     bb_arg_defs.insert(bb_index, arg_defs);
 }
 
+/// Resolve a callee as precisely as possible.
+///
+/// When calling a trait fn, the def_id returned from callee.literal.ty.kind()
+/// is always the fn declaration or default impl in the trait. Here we try to
+/// resolve the concrete callee as precisely as possible. Sometimes it is
+/// impossible to get the exact callee when the call is through a trait object.
+/// For such cases, we need to conservatively assume all the implementors of
+/// the trait are possible. Therefore, this resolve_callee returns a set of
+/// functions instead of only one.
+///
+/// Note that there are unhandled cases of InstanceDef. It is fine now leaving
+/// them unhandled as none of the test program triggered the panic.
+fn resolve_callee<'tcx>(tcx: TyCtxt<'tcx>, callee: &Constant<'tcx>)
+    -> FxHashSet<DefId> {
+    let mut resolved_ids = FxHashSet::<DefId>::default();
+    if let ty::FnDef(callee_id, substs) = *callee.literal.ty().kind() {
+        if tcx.trait_of_item(callee_id).is_none() {
+            // Not a trait fn.
+            resolved_ids.insert(callee_id);
+            return resolved_ids;
+        }
+
+        // Resolving a trait function.
+        if let Some(instance) = ty::Instance::resolve(
+            tcx, ty::ParamEnv::reveal_all(), callee_id, substs).unwrap() {
+            let instance_id = instance.def_id();
+            if  instance_id == callee_id {
+                // Should be one of the two cases:
+                // 1. Directly call a default trait fn, e.g., Trait::foo(..).
+                // 2. Call via a dyn trait, which may be (somehow) resolved to
+                // the default impl of the trait fn. For example:
+                //   trait Trait { fn foo() {...} }
+                //   impl Trait for S { fn foo() {...} }
+                //   fn bar(o: &dyn Trait) { o.foo(); }
+                //   bar(&s); // s is an S.
+                //
+                // The call `o.foo()` is somehow resolved to Trait::foo(), for
+                // which I think "unresolvable" is more reasonable. Luckily,
+                // we can check if the InstanceDef is Virtual to distinguish
+                // it from a direct call to the default trait fn impl.
+                match instance.def {
+                    InstanceDef::Item(_) => {
+                        // Should be from calling a default trait fn.
+                        resolved_ids.insert(callee_id);
+                        return resolved_ids;
+                    },
+                    InstanceDef::Virtual(..) => {
+                        // Dynamic dispatch (dyn Trait). Handle this case below.
+                    },
+                    InstanceDef::VtableShim(_) |
+                    InstanceDef::ReifyShim(_) |
+                    InstanceDef::FnPtrShim(..) => {
+                        // Is it correct to handle those the same as Virtual?
+                    },
+                    InstanceDef::CloneShim(..) => {
+                        // Compiler-generated <T as Clone>::clone(). Do we need
+                        // to resolve all the implementors of it?
+                        resolved_ids.insert(callee_id);
+                        return resolved_ids;
+                    },
+                    InstanceDef::Intrinsic(_) |
+                    InstanceDef::ClosureOnceShim{..} |
+                    InstanceDef::DropGlue(..) => {
+                        // TODO: Do we need to handle them specicially?
+                        panic!("Unhanndled InstanceDef");
+                    }
+                }
+            } else {
+                // Successfully resolved the exact trait fn.
+                resolved_ids.insert(instance_id);
+                return resolved_ids;
+            }
+        }
+
+        // Processing an unresolved case or resolved call by dyn trait.
+        let trait_id = tcx.trait_of_item(callee_id).expect("DefId of Trait");
+        let mut impl_ids = Vec::<DefId>::new();
+        let impls = tcx.trait_impls_of(trait_id);
+        // Collect all the impl of this trait.
+        for impl_id in impls.blanket_impls() {
+            impl_ids.push(*impl_id);
+        }
+        for impl_id_v in impls.non_blanket_impls().values() {
+            for impl_id in impl_id_v {
+                impl_ids.push(*impl_id);
+            }
+        }
+
+        // Find all implemented functions for callee_id.
+        for impl_id in impl_ids {
+            let impl_decl_map = tcx.impl_item_implementor_ids(impl_id);
+            if impl_decl_map.contains_key(&callee_id) {
+                resolved_ids.insert(*impl_decl_map.get(&callee_id).unwrap());
+            } else {
+                // This should be when the call is via a trait object but the
+                // type that impl the trait does not really impl the fn, e.g.,
+                //
+                //   trait Trait {
+                //       fn foo() {...}
+                //       ... // Other fn.
+                //   }
+                //   impl<T: Trait> Trait for S<T> {
+                //       fn bar(t: T) { t.foo(); // Will call the Trait::foo().}
+                //       // S does not impl foo().
+                //   }
+                //
+                // The call to foo() in bar() cannot be resolved as there may be
+                // multiple types that impl Trait.
+                resolved_ids.insert(callee_id);
+            }
+        }
+        return resolved_ids;
+    }
+
+    panic!("Not a function");
+}
+
 /// Analyze a function to find:
 /// 1. Its callees and the definition sites of the arguments of each callee.
 /// 2. The definition sites for its return value, if there is one.
@@ -254,30 +371,37 @@ fn analyze_fn<'tcx>(tcx: TyCtxt<'tcx>, body: &Body<'tcx>, summary: &mut Summary)
     let mut bb_with_calls = Vec::new();
     // Location of return value's def stmt and Local that contribute to it.
     let mut ret_defs = FxHashMap::<Location, FxHashSet::<Local>>::default();
+    // Cache of a BB and the DefId of its resolved callee(s).
+    let mut callee_def_ids = FxHashMap::<u32, Vec<DefId>>::default();
     // Prepare data:
     // 1. BB with a call.
     // 2. BB with return value definition.
     for (bb, bbd) in body.basic_blocks().iter_enumerated() {
         let terminator = &bbd.terminator();
         let bb_index = bb.as_u32();
-        if let TerminatorKind::Call{func: Operand::Constant(f), args,
+        if let TerminatorKind::Call{func: Operand::Constant(callee), args,
             destination, ..} = &terminator.kind {
             bb_with_calls.push(bb);
             // Prepare arg_defs of Callee.
-            let callee_id = get_fn_def_id(f);
-            if let Some(callee) = get_callee(&mut summary.callees, callee_id) {
-                // Has seen a call to this callee before.
-                add_arg_def_slot(&mut callee.arg_defs, args, bb_index);
-            } else {
-                let mut bb_arg_defs = FxHashMap::default();
-                add_arg_def_slot(&mut bb_arg_defs, args, bb_index);
-                summary.callees.push(Callee {
-                    fn_id: get_fn_fingerprint(tcx, callee_id),
-                    fn_name: get_fn_name(callee_id),
-                    crate_name: get_crate_name(callee_id),
-                    def_id: break_def_id(callee_id),
-                    arg_defs: bb_arg_defs
-                });
+            for callee_id in resolve_callee(tcx, callee) {
+                if !callee_def_ids.contains_key(&bb_index) {
+                    callee_def_ids.insert(bb_index, Vec::new());
+                }
+                callee_def_ids.get_mut(&bb_index).unwrap().push(callee_id);
+                if let Some(callee) = get_callee(&mut summary.callees, callee_id) {
+                    // Has seen a call to this callee before.
+                    add_arg_def_slot(&mut callee.arg_defs, args, bb_index);
+                } else {
+                    let mut bb_arg_defs = FxHashMap::default();
+                    add_arg_def_slot(&mut bb_arg_defs, args, bb_index);
+                    summary.callees.push(Callee {
+                        fn_id: get_fn_fingerprint(tcx, callee_id),
+                        fn_name: get_fn_name(callee_id),
+                        crate_name: get_crate_name(callee_id),
+                        def_id: break_def_id(callee_id),
+                        arg_defs: bb_arg_defs
+                    });
+                }
             }
 
             // Prepare for return value.
@@ -314,7 +438,7 @@ fn analyze_fn<'tcx>(tcx: TyCtxt<'tcx>, body: &Body<'tcx>, summary: &mut Summary)
 
     // Process each function call to find the def sites of its arguments.
     for bb in bb_with_calls {
-        if let TerminatorKind::Call{func: Operand::Constant(f), args, ..} =
+        if let TerminatorKind::Call{func: _, args, ..} =
             &body.basic_blocks()[bb].terminator().kind {
             // Recorded visited BB to prevent infite recursions due to loops.
             let mut visited = FxHashSet::<BasicBlock>::default();
@@ -329,8 +453,10 @@ fn analyze_fn<'tcx>(tcx: TyCtxt<'tcx>, body: &Body<'tcx>, summary: &mut Summary)
                 locals.push(arg_locals);
             }
             // Enter the core procedure of finding def sites for fn args.
-            find_arg_def(bb, body, (bb.as_u32(), get_fn_def_id(f)), &mut locals,
-                         &mut visited, summary);
+            for callee_id in callee_def_ids.get(&bb.as_u32()).unwrap() {
+                find_arg_def(bb, body, (bb.as_u32(), *callee_id), &mut locals,
+                    &mut visited, summary);
+            }
         } else {
             panic!("Not a function");
         }

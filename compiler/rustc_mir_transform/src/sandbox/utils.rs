@@ -20,7 +20,10 @@ pub(crate) fn get_crate_name(def_id: DefId) -> String {
 #[inline(always)]
 pub(crate) fn get_fn_name(def_id: DefId) -> String {
     ty::tls::with(|tcx| {
-        return tcx.opt_item_name(def_id).unwrap().to_string();
+        match tcx.opt_item_name(def_id) {
+            Some(name) => { name.to_ident_string() }
+            None => { "closure_or_other_no_name_item".to_owned() }
+        }
     })
 }
 
@@ -192,7 +195,8 @@ pub(crate) fn is_empty_ty<'tcx>(t: Ty<'tcx>) -> bool {
 
 /// Get a function's DefId from a function Constant.
 #[inline(always)]
-pub(crate) fn get_fn_def_id<'tcx>(f: &Constant<'tcx>) -> DefId {
+#[allow(dead_code)]
+pub(crate) fn get_callee_id_shallow<'tcx>(f: &Constant<'tcx>) -> DefId {
     if let ty::FnDef(def_id, _) = *f.literal.ty().kind() {
         return def_id;
     }

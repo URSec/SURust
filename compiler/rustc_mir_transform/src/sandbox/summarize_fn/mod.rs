@@ -146,6 +146,11 @@ impl Summary {
         }
         panic!("Cannot find the target callee");
     }
+
+    #[allow(dead_code)]
+    pub(crate) fn def_id(&self) -> DefId {
+        assemble_def_id(self.def_id)
+    }
 }
 
 impl fmt::Debug for Summary {
