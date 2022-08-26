@@ -11,43 +11,53 @@ use super::{DefSite, Summary, Callee};
 
 static _DEBUG: bool = false;
 
-/// Get the target Callee by DefId from the vector of Callee used by a fn.
-///
-/// This may not be that slow as it looks because a function usually only has
-/// a limited number of callees. We did not use a HashSet for Summary.callees
-/// because HashSet does not support get_mut(). We also did not use
-/// HashMap<DefId, Callee> because serializing it will generate illegal JSON
-/// ("key must be a string").
-#[inline(always)]
-fn get_callee(callees: &mut Vec<Callee>, def_id: DefId) -> Option<&mut Callee> {
-    for callee in callees.iter_mut() {
-        if break_def_id(def_id) == callee.def_id {
-            return Some(callee);
+impl Callee {
+    /// Add a new pair of (bb, arg_defs) to a Calle's arg_defs.
+    fn add_arg_def_slot<'tcx>(&mut self, args: &Vec<Operand<'tcx>>, bb: u32) {
+        let mut arg_defs = Vec::with_capacity(args.len());
+        for _ in 0..args.len() {
+            arg_defs.push(FxHashSet::default());
         }
+        self.arg_defs.insert(bb, arg_defs);
     }
-
-    None
 }
 
-/// Update Callee.arg_defs by adding a new DefSite.
-///
-/// Inputs:
-/// @call: The (BasicBlock, DefId) of the target callee.
-/// @index: Index of the argument in Callee.arg_defs.
-/// @site: A new DefSite
-/// @summary: Summary.
-#[inline(always)]
-fn update_arg_defs(call: (u32, DefId), index: usize, site: DefSite,
-                   summary: &mut Summary) {
-    let callee = get_callee(&mut summary.callees, call.1).unwrap();
-    // The next unwrap is safe as analyze_fn() processes each call.
-    let callee_arg_defs = callee.arg_defs.get_mut(&call.0).unwrap();
-    callee_arg_defs[index].insert(site);
+impl Summary {
+    /// Get the target Callee by DefId from the vector of Callee used by a fn.
+    ///
+    /// This may not be that slow as it looks because a function usually only has
+    /// a limited number of callees. We did not use a HashSet for Summary.callees
+    /// because HashSet does not support get_mut(). We also did not use
+    /// HashMap<DefId, Callee> because serializing it will generate illegal JSON
+    /// ("key must be a string").
+    fn get_callee_local(&mut self, def_id: DefId) -> Option<&mut Callee> {
+        for callee in self.callees.iter_mut() {
+            if break_def_id(def_id) == callee.def_id {
+                return Some(callee);
+            }
+        }
+
+        None
+    }
+
+    /// Update Callee.arg_defs by adding a new DefSite.
+    ///
+    /// Inputs:
+    /// @call: The (BasicBlock, DefId) of the target callee.
+    /// @index: Index of the argument in Callee.arg_defs.
+    /// @site: A new DefSite
+    fn update_arg_defs(&mut self, call: (u32, DefId),
+                       index: usize, site: DefSite) {
+        let callee = self.get_callee_local(call.1).unwrap();
+        // The next unwrap is safe as analyze_fn() processes each call.
+        let callee_arg_defs = callee.arg_defs.get_mut(&call.0).unwrap();
+        callee_arg_defs[index].insert(site);
+    }
+
 }
 
 /// Get the Local of the Place of the return value of a function call, if it
 /// does not return an empty tuple or divert.
-#[inline(always)]
 fn get_non_empty_ret<'tcx>(ret: Place<'tcx>, body: &Body<'tcx>) -> Option<Local> {
     if is_empty_ty(body.local_decls[ret.local].ty) {
         return None;
@@ -88,14 +98,14 @@ fn find_arg_def<'tcx>(bb: BasicBlock, body: &Body<'tcx>,
                     let def_site = def_site_from_call(f, bb_index);
                     match def_site {
                         DefSite::HeapAlloc(_) => {
-                            update_arg_defs(call, i, def_site, summary);
+                            summary.update_arg_defs(call, i, def_site);
                         },
                         DefSite::NativeCall(_) => {
                             get_local_in_args(args, arg_locals);
                         },
                         DefSite::OtherCall(_) => {
                             get_local_in_args(args, arg_locals);
-                            update_arg_defs(call, i, def_site, summary);
+                            summary.update_arg_defs(call, i, def_site);
                         },
                         _ => {}
                     }
@@ -142,7 +152,7 @@ fn find_arg_def<'tcx>(bb: BasicBlock, body: &Body<'tcx>,
             for arg in body.args_iter() {
                 if arg_locals.contains(&arg) {
                     arg_locals.remove(&arg);
-                    update_arg_defs(call, i, DefSite::Arg(arg.as_u32()), summary);
+                    summary.update_arg_defs(call, i, DefSite::Arg(arg.as_u32()));
                 }
             }
         }
@@ -230,19 +240,6 @@ fn find_ret_def<'tcx>(loc: &Location, locals: &mut FxHashSet<Local>,
                 summary.ret_defs.1.push(DefSite::Arg(arg.as_u32()));
             });
     }
-}
-
-/// Add a new pair of (bb, arg_defs) to a Calle's arg_defs.
-#[inline(always)]
-fn add_arg_def_slot<'tcx>(
-    bb_arg_defs: &mut FxHashMap<u32, Vec::<FxHashSet<DefSite>>>,
-    args: &Vec<Operand<'tcx>>,
-    bb_index: u32) {
-    let mut arg_defs = Vec::with_capacity(args.len());
-    for _ in 0..args.len() {
-        arg_defs.push(FxHashSet::default());
-    }
-    bb_arg_defs.insert(bb_index, arg_defs);
 }
 
 /// Resolve a callee as precisely as possible.
@@ -388,19 +385,19 @@ fn analyze_fn<'tcx>(tcx: TyCtxt<'tcx>, body: &Body<'tcx>, summary: &mut Summary)
                     callee_def_ids.insert(bb_index, Vec::new());
                 }
                 callee_def_ids.get_mut(&bb_index).unwrap().push(callee_id);
-                if let Some(callee) = get_callee(&mut summary.callees, callee_id) {
+                if let Some(callee) = summary.get_callee_local(callee_id) {
                     // Has seen a call to this callee before.
-                    add_arg_def_slot(&mut callee.arg_defs, args, bb_index);
+                    callee.add_arg_def_slot(args, bb_index);
                 } else {
-                    let mut bb_arg_defs = FxHashMap::default();
-                    add_arg_def_slot(&mut bb_arg_defs, args, bb_index);
-                    summary.callees.push(Callee {
+                    let mut callee = Callee {
                         fn_id: get_fn_fingerprint(tcx, callee_id),
                         fn_name: get_fn_name(callee_id),
                         crate_name: get_crate_name(callee_id),
                         def_id: break_def_id(callee_id),
-                        arg_defs: bb_arg_defs
-                    });
+                        arg_defs: FxHashMap::default()
+                    };
+                    callee.add_arg_def_slot(args, bb_index);
+                    summary.callees.push(callee);
                 }
             }
 

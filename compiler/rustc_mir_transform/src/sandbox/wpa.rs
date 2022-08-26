@@ -205,7 +205,7 @@ fn find_unsafe_alloc<'a>(summaries: &FxHashMap<FnID, Summary>, cg: CallGraph<'a>
                 // argument in the calls.
                 for caller_id in cg.get_callers(&fn_id) {
                     let caller_sumamry = summaries.get(caller_id).unwrap();
-                    let callee = caller_sumamry.get_callee(&fn_id);
+                    let callee = caller_sumamry.get_callee_global(&fn_id);
                     for bb_defs in callee.arg_defs.values() {
                         for def in &bb_defs[(arg_loc - 1) as usize] {
                             to_process.push_back(GlobalDefSite {

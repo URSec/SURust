@@ -138,7 +138,8 @@ pub struct Summary {
 }
 
 impl Summary {
-    pub(crate) fn get_callee(&self, fn_id: &FnID) -> &Callee {
+    /// Get a Callee by its global ID.
+    pub(crate) fn get_callee_global(&self, fn_id: &FnID) -> &Callee {
         for callee in &self.callees {
             if callee.fn_id == *fn_id {
                 return callee;
