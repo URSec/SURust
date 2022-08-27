@@ -385,12 +385,22 @@ fn analyze_fn<'tcx>(tcx: TyCtxt<'tcx>, body: &Body<'tcx>, summary: &mut Summary)
                     callee_def_ids.insert(bb_index, Vec::new());
                 }
                 callee_def_ids.get_mut(&bb_index).unwrap().push(callee_id);
+                let callee_fn_id = get_fn_fingerprint(tcx, callee_id);
+
+                if tcx.is_foreign_item(callee_id) {
+                    // The Callee is a foreign item. The later WPA will ignore
+                    // foreign functions. Another implementation option is to
+                    // not add such a Callee to Summary. However, we add it
+                    // anyway for the completeness of the call graph.
+                    summary.foreign_callees.insert(callee_fn_id);
+                }
+
                 if let Some(callee) = summary.get_callee_local(callee_id) {
                     // Has seen a call to this callee before.
                     callee.add_arg_def_slot(args, bb_index);
                 } else {
                     let mut callee = Callee {
-                        fn_id: get_fn_fingerprint(tcx, callee_id),
+                        fn_id: callee_fn_id,
                         fn_name: get_fn_name(callee_id),
                         crate_name: get_crate_name(callee_id),
                         def_id: break_def_id(callee_id),

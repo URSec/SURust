@@ -134,7 +134,9 @@ pub struct Summary {
     /// DefSite of Place in return value (CallSite, Arg)
     pub(crate) ret_defs: (FxHashSet<DefSite>, Vec::<DefSite>),
     /// DefSite of Place in unsafe code
-    pub(crate) unsafe_defs: Option<FxHashSet<DefSite>>
+    pub(crate) unsafe_defs: Option<FxHashSet<DefSite>>,
+    /// A set of Callee that are foreign items, usually declared in extern "C".
+    pub(crate) foreign_callees: FxHashSet<FnID>
 }
 
 impl Summary {
@@ -146,6 +148,11 @@ impl Summary {
             }
         }
         panic!("Cannot find the target callee");
+    }
+
+    /// Check if a Callee is a a foreign function.
+    pub(crate) fn is_foreign_callee(&self, callee_fn_id: &FnID) -> bool {
+        return self.foreign_callees.contains(callee_fn_id);
     }
 
     #[allow(dead_code)]
@@ -181,7 +188,8 @@ pub fn summarize<'tcx>(tcx: TyCtxt<'tcx>, def_id: DefId,
         def_id: break_def_id(def_id),
         callees: Vec::new(),
         ret_defs: (FxHashSet::default(), Vec::new()),
-        unsafe_defs: None
+        unsafe_defs: None,
+        foreign_callees: FxHashSet::default()
     };
 
     let body = tcx.optimized_mir(def_id);
