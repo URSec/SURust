@@ -252,6 +252,15 @@ fn find_ret_def<'tcx>(loc: &Location, locals: &mut FxHashSet<Local>,
 /// the trait are possible. Therefore, this resolve_callee returns a set of
 /// functions instead of only one.
 ///
+/// However, it is possible that not all the resolved candidate callees survive.
+/// For example, in crate futures_task-0.3.21, trait fn UnsafeFutureObj::into_raw
+/// is implemented 10 times, and our resolving procedure finds all the 10 impl.
+/// However, summarize::summarize() only sees 4 of them. We need to record such
+/// dyn calls so that when later the WPA fails to find the Summary of a callee,
+/// it would know the cause could be this.
+/// Jie Zhou: It is not clear to me why some impl disappear. A guess: the
+/// compiler may decide that such impl are dead code.
+///
 /// Note that there are unhandled cases of InstanceDef. It is fine now leaving
 /// them unhandled as none of the test program triggered the panic.
 fn resolve_callee<'tcx>(tcx: TyCtxt<'tcx>, callee: &Constant<'tcx>)
@@ -353,6 +362,7 @@ fn resolve_callee<'tcx>(tcx: TyCtxt<'tcx>, callee: &Constant<'tcx>)
                 resolved_ids.insert(callee_id);
             }
         }
+
         return resolved_ids;
     }
 
@@ -380,7 +390,17 @@ fn analyze_fn<'tcx>(tcx: TyCtxt<'tcx>, body: &Body<'tcx>, summary: &mut Summary)
             destination, ..} = &terminator.kind {
             bb_with_calls.push(bb);
             // Prepare arg_defs of Callee.
-            for callee_id in resolve_callee(tcx, callee) {
+            let resolved_callees = resolve_callee(tcx, callee);
+
+            // Record callees that cannot be resolved statically. See the
+            // comment of resolve_callee() for why we need this.
+            if resolved_callees.len() > 1 {
+                for callee_id in &resolved_callees {
+                    summary.dyn_callees.insert(get_fn_fingerprint(tcx, *callee_id));
+                }
+            }
+
+            for callee_id in resolved_callees {
                 if !callee_def_ids.contains_key(&bb_index) {
                     callee_def_ids.insert(bb_index, Vec::new());
                 }

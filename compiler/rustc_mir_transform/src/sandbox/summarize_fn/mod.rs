@@ -95,6 +95,12 @@ impl PartialEq for FnID {
     }
 }
 
+impl fmt::Debug for FnID {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}::{}", self.0.0, self.0.1)
+    }
+}
+
 /// Information of a callee used by a function. Speficially, we collect the
 /// allocation/declaration sites for all the arguments of a callee.
 #[derive(Serialize, Deserialize)]
@@ -136,7 +142,9 @@ pub struct Summary {
     /// DefSite of Place in unsafe code
     pub(crate) unsafe_defs: Option<FxHashSet<DefSite>>,
     /// A set of Callee that are foreign items, usually declared in extern "C".
-    pub(crate) foreign_callees: FxHashSet<FnID>
+    pub(crate) foreign_callees: FxHashSet<FnID>,
+    /// Callee that cannot be resolved at compile time.
+    pub(crate) dyn_callees: FxHashSet<FnID>,
 }
 
 impl Summary {
@@ -153,6 +161,11 @@ impl Summary {
     /// Check if a Callee is a a foreign function.
     pub(crate) fn is_foreign_callee(&self, callee_fn_id: &FnID) -> bool {
         return self.foreign_callees.contains(callee_fn_id);
+    }
+
+    /// Return "crate_name::fn_name" of the function. This is for debugging.
+    pub fn name(&self) -> String {
+        return (self.crate_name.to_owned() + "::" + &self.fn_name).to_owned();
     }
 
     #[allow(dead_code)]
@@ -189,7 +202,8 @@ pub fn summarize<'tcx>(tcx: TyCtxt<'tcx>, def_id: DefId,
         callees: Vec::new(),
         ret_defs: (FxHashSet::default(), Vec::new()),
         unsafe_defs: None,
-        foreign_callees: FxHashSet::default()
+        foreign_callees: FxHashSet::default(),
+        dyn_callees: FxHashSet::default(),
     };
 
     let body = tcx.optimized_mir(def_id);
