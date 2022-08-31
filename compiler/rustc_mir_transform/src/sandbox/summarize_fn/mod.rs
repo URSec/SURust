@@ -102,7 +102,7 @@ impl fmt::Debug for FnID {
 }
 
 /// Information of a callee used by a function. Speficially, we collect the
-/// allocation/declaration sites for all the arguments of a callee.
+/// definition sites for all the arguments of a call of the Callee.
 #[derive(Serialize, Deserialize)]
 pub(crate) struct Callee {
     /// Unique ID of a function that is stable across compilation sessions.
@@ -126,6 +126,21 @@ impl fmt::Debug for Callee {
     }
 }
 
+impl Callee {
+    /// Get the set of DefSite for a certain argument of a call.
+    /// Inputs:
+    /// @bb: Where the call is.
+    /// @arg: Argument number.
+    pub(crate) fn get_arg_defs(&self, bb: u32, arg: u32) -> &FxHashSet<DefSite> {
+        return &self.arg_defs[&bb][(arg - 1) as usize];
+    }
+
+    // Return "crate_name::fn_name" of the callee. This is for debugging.
+    pub fn name(&self) -> String {
+        return (self.crate_name.to_owned() + "::" + &self.fn_name).to_owned();
+    }
+}
+
 /// Summary of a function.
 #[derive(Serialize, Deserialize)]
 pub struct Summary {
@@ -137,7 +152,7 @@ pub struct Summary {
     def_id: (u32, u32),
     /// Callees used in this function. Key is DefId.
     pub(crate) callees: Vec<Callee>,
-    /// DefSite of Place in return value (CallSite, Arg)
+    /// DefSite of Place in return value (FxHashSet<CallSite>, Vec<Arg>)
     pub(crate) ret_defs: (FxHashSet<DefSite>, Vec::<DefSite>),
     /// DefSite of Place in unsafe code
     pub(crate) unsafe_defs: Option<FxHashSet<DefSite>>,
@@ -158,9 +173,26 @@ impl Summary {
         panic!("Cannot find the target callee");
     }
 
+    /// Get all the Callee of a call by BB.
+    pub(crate) fn get_callee_bb(&self, bb: u32) -> Vec::<&Callee> {
+        let mut callees = Vec::new();
+        for callee in &self.callees {
+            if callee.arg_defs.contains_key(&bb) {
+                callees.push(callee);
+            }
+        }
+        assert!(callees.len() > 0, "Cannot find any callee");
+
+        return callees;
+    }
+
     /// Check if a Callee is a a foreign function.
     pub(crate) fn is_foreign_callee(&self, callee_fn_id: &FnID) -> bool {
         return self.foreign_callees.contains(callee_fn_id);
+    }
+
+    pub(crate) fn is_dyn_callee(&self, callee_fn_id: &FnID) -> bool {
+        return self.dyn_callees.contains(callee_fn_id);
     }
 
     /// Return "crate_name::fn_name" of the function. This is for debugging.

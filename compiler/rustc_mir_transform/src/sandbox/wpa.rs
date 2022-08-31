@@ -106,7 +106,6 @@ fn read_summaries() -> io::Result<FxHashMap<FnID, Summary>> {
 }
 
 /// Build the call graph using all the fn summaries.
-#[allow(dead_code)]
 fn build_call_graph<'a>(summaries: &'a FxHashMap<FnID, Summary>) -> CallGraph<'a> {
     let mut cg = CallGraph(FxHashMap::default());
     for (caller_id, summary) in summaries {
@@ -146,7 +145,6 @@ fn build_call_graph<'a>(summaries: &'a FxHashMap<FnID, Summary>) -> CallGraph<'a
 }
 
 /// Update the final results with a newly found def site.
-#[inline(always)]
 fn update_results(results: &mut FxHashMap<FnID, FxHashSet<DefSite>>,
                   fn_id: &FnID, def_site: &DefSite) {
     if let Some(def_sites) = results.get_mut(fn_id) {
@@ -158,46 +156,112 @@ fn update_results(results: &mut FxHashMap<FnID, FxHashSet<DefSite>>,
     }
 }
 
-/// Core procedure of finding unsafe heap allocation sites.
+/// Find unsafe heap allocation sites. We use a worklist-based algorithm to
+/// handle the recursive nature of the process of finding def site. There are
+/// four variants of DefSite. HeapAlloc means a heap alloc site is found.
+/// NativeCall is ignored because we do not analyze native libraries.
+/// OtherCall is the most complex case. We need to find the def site for the
+/// return value of the callee, and those def sites have two types:
+/// arguments of the callee, which come from the def sites in the body of the
+/// caller, and non-argument def sites in the body of the callee.
+/// The last type is Arg. We need to examine all the callers of the
+/// currently processed function to find the def sites in the callers that
+/// contribute to the target arguments of the call to the callee.
 fn find_unsafe_alloc<'a>(summaries: &FxHashMap<FnID, Summary>, cg: CallGraph<'a>)
     -> FxHashMap<FnID, FxHashSet<DefSite>> {
-    // Will it be a little faster to use Vec<DefSite>?
+    // Will it be a little faster to use Vec<DefSite> in the HashMap?
     let mut results = FxHashMap::<FnID, FxHashSet<DefSite>>::default();
     // A worklist of GlobalDefSite to be processed.
     let mut to_process = VecDeque::<GlobalDefSite>::new();
     // Record processed def sites to prevent infinite loop.
     let mut processed = FxHashSet::<GlobalDefSite>::default();
 
-    // Put unsafe def sites collected from unsafe_def to the worklist.
+    // Init: Put unsafe def sites collected from unsafe_def to the worklist.
     for (fn_id, summary) in summaries {
         if let Some(unsafe_defs) = &summary.unsafe_defs {
             for def_site in unsafe_defs {
                 to_process.push_back(GlobalDefSite {
-                    fn_id: *fn_id, def_site: *def_site
+                    fn_id: *fn_id,
+                    def_site: *def_site
                 });
             }
         }
     }
 
+    // Worklist-based algorithm.
     while !to_process.is_empty() {
-        // wp == "whole program"
-        let wp_def_site = to_process.pop_front().unwrap();
-        if processed.contains(&wp_def_site) {
+        let def_site_glob = to_process.pop_front().unwrap();
+        if processed.contains(&def_site_glob) {
             continue;
         }
-        processed.insert(wp_def_site);
+        processed.insert(def_site_glob);
 
-        let (fn_id, def_site) = (wp_def_site.fn_id, wp_def_site.def_site);
+        let (fn_id, def_site) = (def_site_glob.fn_id, def_site_glob.def_site);
         match def_site {
             DefSite::HeapAlloc(_) => {
                 // Found a heap allocation site. Put it to results.
                 update_results(&mut results, &fn_id, &def_site);
             },
             DefSite::NativeCall(_) => {
-                // No need to do anything.
+                // No need to do anything as we do not analyze native fn.
             },
-            DefSite::OtherCall(_) => {
-                // TODO.
+            DefSite::OtherCall(bb) => {
+                // Find all the DefSite that contribute to the return value
+                // of the callee in bb. There are might be multiple callees
+                // due to trait object.
+                let caller_summary = summaries.get(&fn_id).unwrap();
+                for callee in caller_summary.get_callee_bb(bb) {
+                    let callee_id = callee.fn_id;
+                    if caller_summary.is_foreign_callee(&callee_id) {
+                        // Skip FFI calls.
+                        continue;
+                    }
+                    let callee_summary = summaries.get(&callee_id);
+                    if callee_summary.is_none() {
+                        if caller_summary.is_dyn_callee(&callee_id) {
+                            continue;
+                        }
+                        panic!("Cannot find callee {}, called by {}",
+                            callee.name(), caller_summary.name());
+                    }
+
+                    let callee_summary = callee_summary.unwrap();
+                    for def_site in &callee_summary.ret_defs.0 {
+                        // Examine non-arg contributors to the return value.
+                        match def_site {
+                            DefSite::HeapAlloc(_) => {
+                                // Found a heap alloc site.
+                                update_results(&mut results, &callee_id, &def_site);
+                            },
+                            DefSite::OtherCall(_) => {
+                                to_process.push_back(GlobalDefSite {
+                                    fn_id: callee_id,
+                                    def_site: *def_site
+                                });
+                            },
+                            _ => {
+                                panic!("Not a DefSite::HeapAlloc or OtherCall");
+                            }
+                        }
+                    }
+                    for def_site in &callee_summary.ret_defs.1 {
+                        // Examine argument contributors to the return value.
+                        match def_site {
+                            DefSite::Arg(arg) => {
+                                for arg_def in callee.get_arg_defs(bb, *arg) {
+                                    to_process.push_back(GlobalDefSite {
+                                        fn_id: fn_id,
+                                        def_site: *arg_def,
+                                    });
+                                }
+                            },
+                            _ => {
+                                panic!("Not a DefSite::Arg");
+                            }
+                        }
+                    }
+
+                }
             },
             DefSite::Arg(arg_loc) => {
                 // Examine all callers of fn_id to find their corresponding
@@ -206,11 +270,11 @@ fn find_unsafe_alloc<'a>(summaries: &FxHashMap<FnID, Summary>, cg: CallGraph<'a>
                 for caller_id in cg.get_callers(&fn_id) {
                     let caller_sumamry = summaries.get(caller_id).unwrap();
                     let callee = caller_sumamry.get_callee_global(&fn_id);
-                    for bb_defs in callee.arg_defs.values() {
-                        for def in &bb_defs[(arg_loc - 1) as usize] {
+                    for arg_defs in callee.arg_defs.values() {
+                        for def_site in &arg_defs[(arg_loc - 1) as usize] {
                             to_process.push_back(GlobalDefSite {
                                 fn_id: *caller_id,
-                                def_site: *def,
+                                def_site: *def_site,
                             });
                         }
                     }
@@ -273,8 +337,9 @@ pub fn wpa(main_summaries: Vec<Summary>) {
         all_summaries.insert(summary.fn_id, summary);
     }
 
-    // Buld a call graph.
+    // Build a call graph.
     let cg = build_call_graph(&all_summaries);
+
     // Find unsafe heap allocations.
     find_unsafe_alloc(&all_summaries, cg);
 
