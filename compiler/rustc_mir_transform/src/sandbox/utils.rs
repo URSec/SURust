@@ -184,7 +184,7 @@ pub(crate) fn get_local_in_rvalue<'tcx>(rvalue: &Rvalue<'tcx>,
 }
 
 
-#[inline(always)]
+/// Check if a type is the empty type, i.e., '()'.
 pub(crate) fn is_empty_ty<'tcx>(t: Ty<'tcx>) -> bool {
     if let ty::Tuple(tys) = t.kind() {
         if tys.len() == 0 { return true; }
@@ -194,9 +194,8 @@ pub(crate) fn is_empty_ty<'tcx>(t: Ty<'tcx>) -> bool {
 }
 
 /// Get a function's DefId from a function Constant.
-#[inline(always)]
 #[allow(dead_code)]
-pub(crate) fn get_callee_id_shallow<'tcx>(f: &Constant<'tcx>) -> DefId {
+pub(crate) fn get_callee_id_local<'tcx>(f: &Constant<'tcx>) -> DefId {
     if let ty::FnDef(def_id, _) = *f.literal.ty().kind() {
         return def_id;
     }
@@ -205,13 +204,11 @@ pub(crate) fn get_callee_id_shallow<'tcx>(f: &Constant<'tcx>) -> DefId {
 }
 
 /// Break a DefId into a tuple of its DefIndex and CrateNum.
-#[inline(always)]
 pub(crate) fn break_def_id(def_id: DefId) -> (u32, u32) {
     (def_id.index.as_u32(), def_id.krate.as_u32())
 }
 
 /// Create a DefId based on two u32 as DefIndex and CrateNum, respectively.
-#[inline(always)]
 pub(crate) fn assemble_def_id((index, krate): (u32, u32)) -> DefId {
     DefId {
         index: DefIndex::from_u32(index),
@@ -227,14 +224,21 @@ pub(crate) fn get_summary_dir() -> String {
     return "/tmp/rust-sandbox-".to_owned() + &getppid().to_string();
 }
 
+/// Get the path of the whole-program summary.
+pub(crate) fn get_wp_summary_path() -> String {
+    return "/tmp/rust-sandbox-".to_owned() + &getppid().to_string() + "-summary";
+}
+
 /// Create a DefSite from a function call.
 pub(crate) fn def_site_from_call<'tcx>(f: &Constant<'tcx>, bb_index: u32)
     -> DefSite {
     if let ty::FnDef(def_id, _) = *f.literal.ty().kind() {
-        if HEAP_ALLOC.contains(&get_fn_name(def_id)) {
-            return DefSite::HeapAlloc(bb_index);
-        } else if NATIVE_LIBS.contains(&get_crate_name(def_id)) {
-            return DefSite::NativeCall(bb_index);
+        if NATIVE_LIBS.contains(&get_crate_name(def_id)) {
+            if HEAP_ALLOC.contains(&get_fn_name(def_id)) {
+                return DefSite::HeapAlloc(bb_index);
+            } else {
+                return DefSite::NativeCall(bb_index);
+            }
         } else {
             return DefSite::OtherCall(bb_index);
         }
@@ -244,7 +248,6 @@ pub(crate) fn def_site_from_call<'tcx>(f: &Constant<'tcx>, bb_index: u32)
 }
 
 /// Get the inner value of DefPathHash (Fingerprint) of a function.
-#[inline(always)]
 pub(crate) fn get_fn_fingerprint<'tcx>(tcx: TyCtxt<'tcx>, def_id: DefId) -> FnID {
     FnID(tcx.def_path_hash(def_id).0.as_value())
 }

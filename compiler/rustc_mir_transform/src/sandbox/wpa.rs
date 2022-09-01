@@ -8,6 +8,7 @@ use rustc_data_structures::fx::{FxHashMap, FxHashSet};
 use std::{fmt, io};
 use std::collections::VecDeque;
 use std::process::{Command, Stdio};
+use std::fs;
 
 use super::summarize_fn::{Summary, FnID, DefSite};
 use super::utils::*;
@@ -68,7 +69,6 @@ impl PartialEq for GlobalDefSite {
 
 /// Count the number of summary files in the temporary summary directory.
 /// Essentiall, it gets the result of `ls | wc -l` and converts it to an u32.
-#[inline(always)]
 fn curr_dep_crate_num(summary_dir: &str) -> io::Result<u32> {
     let ls = Command::new("ls").arg(summary_dir).stdout(Stdio::piped()).spawn()?;
     let wc = Command::new("wc").arg("-l").stdin(ls.stdout.unwrap()).output()?;
@@ -103,6 +103,23 @@ fn read_summaries() -> io::Result<FxHashMap<FnID, Summary>> {
     }
 
     Ok(dep_summaries)
+}
+
+/// Write the result of the WPA to a file that will be used by all compile units.
+///
+/// Since we just deleted the directory of summaries, here we simply put
+/// the overall summary file in "/tmp".
+fn write_wpa_summary(summary: FxHashMap<FnID, FxHashSet<DefSite>>) {
+    // We need to move the analysis results to a vector because the original
+    // summary's key is FnID, which is not a string and thus cannot be
+    // serialized by serde_json.
+    let mut summary_vec = Vec::<(FnID, FxHashSet<DefSite>)>::new();
+    for (fn_id, def_sites) in summary {
+        summary_vec.push((fn_id, def_sites));
+    }
+    let serialized = serde_json::to_string(&summary_vec).unwrap();
+    fs::write(get_wp_summary_path(), &serialized).expect(
+        "Write whole-program summary to file");
 }
 
 /// Build the call graph using all the fn summaries.
@@ -341,9 +358,12 @@ pub fn wpa(main_summaries: Vec<Summary>) {
     let cg = build_call_graph(&all_summaries);
 
     // Find unsafe heap allocations.
-    find_unsafe_alloc(&all_summaries, cg);
+    let summary_wpa = find_unsafe_alloc(&all_summaries, cg);
 
     // Delete the summary folder. This is necessayr because a compilation
     // may happen to have the same ppid as one older compilation.
     let _ = remove_dir_all(get_summary_dir());
+
+    // Write the final whole-program summary to a file for later analysis.
+    write_wpa_summary(summary_wpa);
 }
