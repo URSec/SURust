@@ -362,7 +362,9 @@ pub fn collect_crate_mono_items(
     }
 
     // Sandbox unsafe Rust.
-    sandbox_unsafe(tcx, &visited);
+    if tcx.sess.opts.cg.sandbox {
+        sandbox_unsafe(tcx, &visited);
+    }
 
     (visited.into_inner(), inlining_map.into_inner())
 }

@@ -1161,6 +1161,8 @@ options! {
         "print remarks for these optimization passes (space separated, or \"all\")"),
     rpath: bool = (false, parse_bool, [UNTRACKED],
         "set rpath values in libs/exes (default: no)"),
+    sandbox: bool = (false, parse_bool, [UNTRACKED],
+        "sandbox unsafe heap objects and unsafe memory accesses"),
     save_temps: bool = (false, parse_bool, [UNTRACKED],
         "save all temporary output files during compilation (default: no)"),
     soft_float: bool = (false, parse_bool, [TRACKED],
