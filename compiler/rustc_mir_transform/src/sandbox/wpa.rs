@@ -360,7 +360,7 @@ pub fn wpa(main_summaries: Vec<Summary>) {
     // Find unsafe heap allocations.
     let summary_wpa = find_unsafe_alloc(&all_summaries, cg);
 
-    // Delete the summary folder. This is necessayr because a compilation
+    // Delete the summary folder. This is necessary because a compilation
     // may happen to have the same ppid as one older compilation.
     let _ = remove_dir_all(get_summary_dir());
 

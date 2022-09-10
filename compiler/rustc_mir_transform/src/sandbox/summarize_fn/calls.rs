@@ -167,6 +167,11 @@ fn find_arg_def<'tcx>(bb: BasicBlock, body: &Body<'tcx>,
 /// @body: Body of the target function.
 /// @visited: Processed BasicBlock.
 /// @summary: Summary.
+///
+/// TODO: We assume that there is no MIR code like _5 = foo(_5, ..), i.e.,
+/// the return of a call is assigned to a Place that is also used as one of the
+/// arguments. We should add assert for this. We would otherwise run the risk
+/// of missing the def sites for such Place.
 fn find_ret_def<'tcx>(loc: &Location, locals: &mut FxHashSet<Local>,
                       body: &Body<'tcx>, visited: &mut FxHashSet<BasicBlock>,
                       summary: &mut Summary) {

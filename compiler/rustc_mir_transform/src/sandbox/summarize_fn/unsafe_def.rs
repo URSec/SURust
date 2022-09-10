@@ -268,9 +268,9 @@ fn find_unsafe_def_core<'tcx>(place_locals: &mut FxHashSet<Local>,
 /// Find unsafe definition sites within a non-unsafe function.
 ///
 /// It first collects all the Place of operations (Statement/Terminator) in
-/// unsafe blocks. It then calls the core g procedure to
-/// iterate over each BB that contains unsafe operations and the BB's
-/// predecessors to find def sites that generate those unsafe Place.
+/// unsafe blocks. It then calls the core procedure to iterate over each BB
+/// that contains unsafe operations and the BB's predecessors to find def sites
+/// that generate those unsafe Place.
 fn find_unsafe_def<'tcx>(body: &'tcx Body<'tcx>, results: &mut FxHashSet<DefSite>) {
     // Collect operations in unsafe blocks.
     let mut unsafe_ops = Vec::new();
