@@ -128,6 +128,7 @@ impl fmt::Debug for Callee {
 
 impl Callee {
     /// Get the set of DefSite for a certain argument of a call.
+    ///
     /// Inputs:
     /// @bb: Where the call is.
     /// @arg: Argument number.
@@ -184,6 +185,12 @@ impl Summary {
         assert!(callees.len() > 0, "Cannot find any callee");
 
         return callees;
+    }
+
+    /// Check if the def sites for the return value contain a specific DefSite.
+    pub(crate) fn ret_defs_contains(&self, def_site: &DefSite) -> bool {
+        return self.ret_defs.0.contains(def_site) ||
+            self.ret_defs.1.contains(def_site);
     }
 
     /// Check if a Callee is a a foreign function.

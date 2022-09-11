@@ -1,7 +1,8 @@
 //! Whole-program analysis. Specifically,
 //!
-//!   1. build a call graph of the whole program.
-//!   2. find unsafe heap alloc sites inter-procedurally.
+//!   1. Build a call graph of the whole program.
+//!   2. Find unsafe heap alloc sites inter-procedurally.
+//!   3. Find may-unsafe fn arguments and non-heap-alloc calls inter-procedurally.
 
 use std::fs::{read_dir, read_to_string, remove_dir_all};
 use rustc_data_structures::fx::{FxHashMap, FxHashSet};
@@ -67,6 +68,9 @@ impl PartialEq for GlobalDefSite {
     }
 }
 
+/// Whole-program summary.
+type WPSummary = FxHashMap<FnID, FxHashSet<DefSite>>;
+
 /// Count the number of summary files in the temporary summary directory.
 /// Essentiall, it gets the result of `ls | wc -l` and converts it to an u32.
 fn curr_dep_crate_num(summary_dir: &str) -> io::Result<u32> {
@@ -109,7 +113,7 @@ fn read_summaries() -> io::Result<FxHashMap<FnID, Summary>> {
 ///
 /// Since we just deleted the directory of summaries, here we simply put
 /// the overall summary file in "/tmp".
-fn write_wpa_summary(summary: FxHashMap<FnID, FxHashSet<DefSite>>) {
+fn write_wpa_summary(summary: WPSummary) {
     // We need to move the analysis results to a vector because the original
     // summary's key is FnID, which is not a string and thus cannot be
     // serialized by serde_json.
@@ -161,15 +165,15 @@ fn build_call_graph<'a>(summaries: &'a FxHashMap<FnID, Summary>) -> CallGraph<'a
     cg
 }
 
-/// Update the final results with a newly found def site.
-fn update_results(results: &mut FxHashMap<FnID, FxHashSet<DefSite>>,
-                  fn_id: &FnID, def_site: &DefSite) {
-    if let Some(def_sites) = results.get_mut(fn_id) {
+/// Update the whole-program summary with a newly found def site.
+fn update_wp_summary(wp_summary: &mut WPSummary,
+                     fn_id: &FnID, def_site: &DefSite) {
+    if let Some(def_sites) = wp_summary.get_mut(fn_id) {
         def_sites.insert(*def_site);
     } else {
         let mut def_sites = FxHashSet::default();
         def_sites.insert(*def_site);
-        results.insert(*fn_id, def_sites);
+        wp_summary.insert(*fn_id, def_sites);
     }
 }
 
@@ -184,10 +188,9 @@ fn update_results(results: &mut FxHashMap<FnID, FxHashSet<DefSite>>,
 /// The last type is Arg. We need to examine all the callers of the
 /// currently processed function to find the def sites in the callers that
 /// contribute to the target arguments of the call to the callee.
-fn find_unsafe_alloc<'a>(summaries: &FxHashMap<FnID, Summary>, cg: CallGraph<'a>)
-    -> FxHashMap<FnID, FxHashSet<DefSite>> {
-    // Will it be a little faster to use Vec<DefSite> in the HashMap?
-    let mut results = FxHashMap::<FnID, FxHashSet<DefSite>>::default();
+fn find_unsafe_alloc<'a>(summaries: &FxHashMap<FnID, Summary>,
+                         cg: &CallGraph<'a>,
+                         wp_summary: &mut WPSummary) {
     // A worklist of GlobalDefSite to be processed.
     let mut to_process = VecDeque::<GlobalDefSite>::new();
     // Record processed def sites to prevent infinite loop.
@@ -217,7 +220,7 @@ fn find_unsafe_alloc<'a>(summaries: &FxHashMap<FnID, Summary>, cg: CallGraph<'a>
         match def_site {
             DefSite::HeapAlloc(_) => {
                 // Found a heap allocation site. Put it to results.
-                update_results(&mut results, &fn_id, &def_site);
+                update_wp_summary(wp_summary, &fn_id, &def_site);
             },
             DefSite::NativeCall(_) => {
                 // No need to do anything as we do not analyze native fn.
@@ -248,7 +251,7 @@ fn find_unsafe_alloc<'a>(summaries: &FxHashMap<FnID, Summary>, cg: CallGraph<'a>
                         match def_site {
                             DefSite::HeapAlloc(_) => {
                                 // Found a heap alloc site.
-                                update_results(&mut results, &callee_id, &def_site);
+                                update_wp_summary(wp_summary, &callee_id, &def_site);
                             },
                             DefSite::OtherCall(_) => {
                                 to_process.push_back(GlobalDefSite {
@@ -301,9 +304,117 @@ fn find_unsafe_alloc<'a>(summaries: &FxHashMap<FnID, Summary>, cg: CallGraph<'a>
     }
 
     if _DEBUG {
-        println!("Found {} unsafe allocation sites", results.len());
+        println!("Found {} unsafe allocation sites", wp_summary.len());
     }
-    results
+}
+
+/// Find unsafe fn arguments and non-heap-alloc calls that return unsafe value.
+/// This function, combined with find_unsafe_alloc, prepares unsafe sources
+/// for later local analysis to find unsafe memory accesses.
+///
+/// Specifically, in addition to the unsafe heap allocation sites that were
+/// found before by find_unsafe_alloc, it finds two more unsafe sources:
+/// unsafe function arguments and unsafe non-heap-alloc calls.
+///
+/// Similar to find_unsafe_alloc, this function also uses a worklist-based
+/// algorithm. It starts with all the unsafe heap allocation sites found before.
+/// It examines two situations. First, if an unsafe souce is used as an argument
+/// to a non-heap-alloc call, the argument of the callee is also an unsafe
+/// resouce and the algorithm puts the argument to the worklist.
+/// Second, if an unsafe source contributes to the return value of the function
+/// that contains it, then for all the callers of this function, the calls to
+/// it are also unsafe sources.
+fn find_unsafe_arg_call<'a>(summaries: &FxHashMap<FnID, Summary>,
+                            cg: &CallGraph<'a>,
+                            wp_summary: &mut WPSummary) {
+    // A worklist of GlobalDefSite to be processed.
+    let mut to_process = VecDeque::<GlobalDefSite>::new();
+    // Record processed GlobalDefSite to prevent infinite loop.
+    let mut processed = FxHashSet::<GlobalDefSite>::default();
+
+    // Init: Put all the unsafe heap allocation sites to the worklist.
+    for (fn_id, def_sites) in wp_summary.iter() {
+        for def_site in def_sites {
+            // Ensure all the DefSite collected before are HeapAlloc.
+            assert!(matches!(*def_site, DefSite::HeapAlloc(_)),
+                "Not a heap allocation");
+            to_process.push_back(GlobalDefSite {
+                fn_id: *fn_id,
+                def_site: *def_site
+            });
+        }
+    }
+
+    // A worklist-based algorithm.
+    while !to_process.is_empty() {
+        let def_site_glob = to_process.pop_front().unwrap();
+        if !processed.insert(def_site_glob) {
+            continue;
+        }
+
+        // For the currently-processed unsafe GlobalDefSite, get the FnID of the
+        // function that contains it, and the local DefSite of it.
+        let (fn_id, def_site) = (def_site_glob.fn_id, def_site_glob.def_site);
+        match def_site {
+            DefSite::HeapAlloc(_) | DefSite::OtherCall(_) | DefSite::Arg(_) => {
+                let fn_summary = summaries.get(&fn_id);
+                if fn_summary.is_none() {
+                    // It is possible that fn_id is a native library function.
+                    // This happens for DefSite:Arg.
+                    continue;
+                }
+                let fn_summary = fn_summary.unwrap();
+
+                // Find calls in this function that use the unsafe source as an
+                // argument, and put the corresponding argument to the worklist.
+                for callee in &fn_summary.callees {
+                    for (bb, all_arg_defs) in &callee.arg_defs {
+                        match def_site {
+                            DefSite::HeapAlloc(unsafe_call) |
+                            DefSite::OtherCall(unsafe_call) => {
+                                if *bb == unsafe_call {
+                                    // Skip the unsafe call iteself.
+                                    continue;
+                                }
+                            },
+                            _ => {}
+                        }
+
+                        // Check if the def sites for any argument of a call
+                        // contains the target unsafe def_site.
+                        for arg in 1..=all_arg_defs.len() {
+                            if all_arg_defs[arg - 1].contains(&def_site) {
+                                to_process.push_back(GlobalDefSite {
+                                    fn_id: callee.fn_id,
+                                    def_site: DefSite::Arg(arg as u32)
+                                });
+                            }
+                        }
+                    }
+                }
+
+                // If the current unsafe def_site contributes to the return of
+                // the current function, find all calls to this function and
+                // put them to the worklist.
+                if fn_summary.ret_defs_contains(&def_site) {
+                    for caller_id in cg.get_callers(&fn_id) {
+                        let caller_summary = summaries.get(caller_id).unwrap();
+                        let callee = caller_summary.get_callee_global(&fn_id);
+                        for call_site in callee.arg_defs.keys() {
+                            let unsafe_call_site = GlobalDefSite {
+                                fn_id: *caller_id,
+                                def_site: DefSite::OtherCall(*call_site)
+                            };
+                            update_wp_summary(wp_summary, &caller_id,
+                                              &unsafe_call_site.def_site);
+                            to_process.push_back(unsafe_call_site);
+                        }
+                    }
+                }
+            },
+            _ => {}
+        }
+    }
 }
 
 /// Dump the call graph of the main crate for debugging.
@@ -357,13 +468,20 @@ pub fn wpa(main_summaries: Vec<Summary>) {
     // Build a call graph.
     let cg = build_call_graph(&all_summaries);
 
+    // Whole-program summary for later analysis to find unsafe memory accesses.
+    // Question: Will it be a little faster to use Vec<DefSite> in the HashMap?
+    let mut wp_summary = WPSummary::default();
+
     // Find unsafe heap allocations.
-    let summary_wpa = find_unsafe_alloc(&all_summaries, cg);
+    find_unsafe_alloc(&all_summaries, &cg, &mut wp_summary);
+
+    // Find may-unsafe function arguments and non-heap-alloc calls.
+    find_unsafe_arg_call(&all_summaries, &cg, &mut wp_summary);
 
     // Delete the summary folder. This is necessary because a compilation
     // may happen to have the same ppid as one older compilation.
     let _ = remove_dir_all(get_summary_dir());
 
     // Write the final whole-program summary to a file for later analysis.
-    write_wpa_summary(summary_wpa);
+    write_wpa_summary(wp_summary);
 }
