@@ -384,10 +384,13 @@ fn find_unsafe_arg_call<'a>(summaries: &FxHashMap<FnID, Summary>,
                         // contains the target unsafe def_site.
                         for arg in 1..=all_arg_defs.len() {
                             if all_arg_defs[arg - 1].contains(&def_site) {
-                                to_process.push_back(GlobalDefSite {
+                                let unsafe_arg = GlobalDefSite {
                                     fn_id: callee.fn_id,
                                     def_site: DefSite::Arg(arg as u32)
-                                });
+                                };
+                                update_wp_summary(wp_summary, &unsafe_arg.fn_id,
+                                                  &unsafe_arg.def_site);
+                                to_process.push_back(unsafe_arg);
                             }
                         }
                     }
