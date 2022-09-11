@@ -396,6 +396,7 @@ fn analyze_fn<'tcx>(tcx: TyCtxt<'tcx>, body: &Body<'tcx>, summary: &mut Summary)
             bb_with_calls.push(bb);
             // Prepare arg_defs of Callee.
             let resolved_callees = resolve_callee(tcx, callee);
+            assert!(resolved_callees.len() > 0, "Failed to resolve calls");
 
             // Record callees that cannot be resolved statically. See the
             // comment of resolve_callee() for why we need this.
