@@ -206,7 +206,7 @@ use std::ops::Range;
 use std::path::PathBuf;
 
 // Sandboxing
-use rustc_mir_transform::sandbox::{summarize_fn, wpa};
+use rustc_mir_transform::sandbox::{summarize_fn, wpa, unsafe_access};
 
 #[derive(PartialEq)]
 pub enum MonoItemCollectionMode {
@@ -378,6 +378,15 @@ pub fn collect_crate_mono_items(
 /// 4. Other processes wait for the final summary, and then analyze and transform.
 fn sandbox_unsafe<'tcx>(tcx: TyCtxt<'tcx>,
                         visited: &MTLock<FxHashSet<MonoItem<'tcx>>>) {
+    // Do local analysis to find unsafe memory accesses, if the previous
+    // WPA result is ready.
+    if tcx.sess.opts.cg.sandbox_unsafe_access {
+        unsafe_access::analyze();
+        return;
+    }
+
+    // Do local anlaysis to summarize functiosn and then do WPA to find unsafe
+    // heap allocation site, arguments, and non-heap-alloc sites.
     let mut summaries = Vec::<summarize_fn::Summary>::new();
     // rustc actually only keeps one copy of MIR for all the MonoItem that are
     // from the same function with generic type parameter(s).

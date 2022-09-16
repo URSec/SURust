@@ -10,6 +10,7 @@
 
 pub mod summarize_fn;
 pub mod wpa;
+pub mod unsafe_access;
 pub(crate) mod utils;
 pub(crate) mod debug;
 pub(crate) mod database;

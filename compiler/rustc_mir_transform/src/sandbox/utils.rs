@@ -225,8 +225,13 @@ pub(crate) fn get_summary_dir() -> String {
 }
 
 /// Get the path of the whole-program summary.
+///
+/// TODO: Now we write it to "/tmp/rust-sandbox-summary" beause we still haven't
+/// solved the synchronization between the analysis results of dependece crates
+/// and the binary crate. Once that is solved, we should write it to
+/// "/tmp/rust-sandbox-".to_owned() + &getppid().to_string() + "-summary""
 pub(crate) fn get_wp_summary_path() -> String {
-    return "/tmp/rust-sandbox-".to_owned() + &getppid().to_string() + "-summary";
+    return "/tmp/rust-sandbox-summary".to_owned();
 }
 
 /// Create a DefSite from a function call.
