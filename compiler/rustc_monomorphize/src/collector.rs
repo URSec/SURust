@@ -381,7 +381,27 @@ fn sandbox_unsafe<'tcx>(tcx: TyCtxt<'tcx>,
     // Do local analysis to find unsafe memory accesses, if the previous
     // WPA result is ready.
     if tcx.sess.opts.cg.sandbox_unsafe_access {
-        unsafe_access::analyze();
+        let mut processed = FxHashSet::default();
+        let mut unsafe_accesses_all = Vec::<unsafe_access::UnsafeAccesses>::new();
+        // Total memory accesses (dereferences to Place).
+        let mut total_deref: u32 = 0;
+        let unsafe_sources = unsafe_access::read_wpa();
+        for item in visited.get_ref() {
+            match item {
+                MonoItem::Fn(instance) => {
+                    let def_id = instance.def_id();
+                    if processed.insert(def_id) {
+                        unsafe_access::analyze(tcx, def_id, &unsafe_sources,
+                                               &mut unsafe_accesses_all,
+                                               &mut total_deref);
+                    }
+                },
+                _ => {}
+            }
+        }
+
+        let _unsafe_deref_num = unsafe_access::unsafe_access_num(&unsafe_accesses_all);
+
         return;
     }
 

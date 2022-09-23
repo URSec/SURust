@@ -69,7 +69,10 @@ impl PartialEq for GlobalDefSite {
 }
 
 /// Whole-program summary.
-type WPSummary = FxHashMap<FnID, FxHashSet<DefSite>>;
+pub type WPSummary = FxHashMap<FnID, FxHashSet<DefSite>>;
+
+/// All the unsafe sources.
+pub(crate) type UnsafeSources = Vec::<(FnID, FxHashSet<DefSite>)>;
 
 /// Count the number of summary files in the temporary summary directory.
 /// Essentiall, it gets the result of `ls | wc -l` and converts it to an u32.
@@ -117,7 +120,7 @@ fn write_wpa_summary(summary: WPSummary) {
     // We need to move the analysis results to a vector because the original
     // summary's key is FnID, which is not a string and thus cannot be
     // serialized by serde_json.
-    let mut summary_vec = Vec::<(FnID, FxHashSet<DefSite>)>::new();
+    let mut summary_vec = UnsafeSources::new();
     for (fn_id, def_sites) in summary {
         summary_vec.push((fn_id, def_sites));
     }

@@ -107,6 +107,9 @@ pub(crate) fn get_place_in_operand<'tcx>(operand: &Operand<'tcx>,
 }
 
 /// Get the Place(s) in a Rvalue.
+///
+/// TODO? It seems that it is more convenient to let this function return
+/// a vector of Place in rvalue.
 pub(crate) fn get_place_in_rvalue<'tcx>(rvalue: &Rvalue<'tcx>,
                                         places: &mut Vec<Place<'tcx>>) {
     match rvalue {
@@ -256,3 +259,93 @@ pub(crate) fn def_site_from_call<'tcx>(f: &Constant<'tcx>, bb_index: u32)
 pub(crate) fn get_fn_fingerprint<'tcx>(tcx: TyCtxt<'tcx>, def_id: DefId) -> FnID {
     FnID(tcx.def_path_hash(def_id).0.as_value())
 }
+
+
+/// Extract Place in a Statement.
+pub(crate) fn get_place_in_stmt<'tcx>(stmt: &Statement<'tcx>,
+                                      places: &mut Vec::<Place<'tcx>>) {
+    match &stmt.kind {
+        StatementKind::Assign(box (place, rvalue)) => {
+            places.push(*place);
+            get_place_in_rvalue(rvalue, places);
+            // Will the "box ..." syntax creates a new heap object?
+            // If so this might be too slow.
+        },
+        StatementKind::FakeRead(box (_cause, _place)) => {
+            print_stmt("FakeRead", stmt);
+            // TODO?: Handle FakeRead
+            panic!("Need to examine this FakeRead");
+        },
+        StatementKind::SetDiscriminant {box place, ..} => {
+            places.push(*place);
+        },
+        StatementKind::Deinit(box place) => {
+            places.push(*place);
+        },
+        StatementKind::Retag(_, box place) => {
+            // What exactly is a retag inst?
+            print_stmt("Retag", stmt);
+            places.push(*place);
+        },
+        StatementKind::AscribeUserType(box (place, _), _) => {
+            // What exactly is an AscribeUserType? And the doc says this will
+            // be an nop at execution time; do we need to handle it?
+            print_stmt("AscribeUserType", stmt);
+            places.push(*place);
+        },
+        StatementKind::CopyNonOverlapping(box cno) => {
+            get_place_in_operand(&cno.src, places);
+            get_place_in_operand(&cno.dst, places);
+            // Do we really need to record the place of the count arg?
+            get_place_in_operand(&cno.count, places);
+        },
+        StatementKind::StorageLive(_)
+            | StatementKind::StorageDead(_)
+            | StatementKind::Coverage(_)
+            | StatementKind::Nop => { }
+    }
+}
+
+/// Extract Place in a Terminator.
+pub(crate) fn get_place_in_terminator<'tcx>(body: &'tcx Body<'tcx>,
+                                 terminator: &Terminator<'tcx>,
+                                 places: &mut Vec::<Place<'tcx>>) {
+    match &terminator.kind {
+        TerminatorKind::SwitchInt{discr, ..} => {
+            get_place_in_operand(discr, places);
+        },
+        TerminatorKind::Drop{place, ..} => {
+            places.push(*place);
+        },
+        TerminatorKind::DropAndReplace{place, value, ..} => {
+            places.push(*place);
+            get_place_in_operand(value, places);
+        },
+        TerminatorKind::Call{func: _, args, destination, ..} => {
+            // For some unknown reason(s), sometimes printing a Call in println!
+            // will crash the compiler.
+            for arg in args {
+                get_place_in_operand(arg, places);
+            }
+            // Get the Place of the LHS if the call returns something.
+            if is_empty_ty(body.local_decls[destination.local].ty) {
+                // Ignore return type of "()".
+                return;
+            }
+            // Question: Should we ignore all locals, i.e., Place whose
+            // projection is empty?
+            places.push(*destination);
+        },
+        TerminatorKind::Assert{cond, ..} => {
+            // Do we need to handle assertions?
+            get_place_in_operand(cond, places);
+        },
+        TerminatorKind::Yield{value, resume: _, resume_arg, ..} => {
+            get_place_in_operand(value, places);
+            places.push(*resume_arg);
+        },
+        _ => {}
+    }
+}
+
+

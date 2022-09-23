@@ -43,7 +43,7 @@ static _DEBUG: bool = false;
 /// of func. Note that there is no need to analyze the arguments of func in WPA
 /// because unsafe_def has done it.
 #[derive(Hash, Eq, Serialize, Deserialize, Copy, Clone)]
-pub(crate) enum DefSite {
+pub enum DefSite {
     // Since a call is always a Terminator, we use its BB's index as its location.
     /// Location of a call to a heap allocation.
     HeapAlloc(u32),
@@ -87,7 +87,7 @@ impl fmt::Debug for DefSite {
 /// to why we use u32 a lot to represent BasicBlock and def_id's components.
 /// We should fix these issues later.
 #[derive(Serialize, Deserialize, Hash, Eq, Copy, Clone)]
-pub(crate) struct FnID(pub(crate) (u64, u64));
+pub struct FnID(pub(crate) (u64, u64));
 
 impl PartialEq for FnID {
     fn eq(&self, other: &FnID) -> bool {
