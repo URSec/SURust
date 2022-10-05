@@ -4,7 +4,8 @@
 //!   2. Find unsafe heap alloc sites inter-procedurally.
 //!   3. Find may-unsafe fn arguments and non-heap-alloc calls inter-procedurally.
 
-use std::fs::{read_dir, read_to_string, remove_dir_all};
+use std::fs::{read_dir, read_to_string};
+use std::fs::{remove_dir_all};
 use rustc_data_structures::fx::{FxHashMap, FxHashSet};
 use std::{fmt, io};
 use std::collections::VecDeque;
@@ -19,7 +20,7 @@ static _DEBUG: bool = false;
 /// A Python script that counts the number of compiled dependency crates.
 /// This is not elegant. Ideally we should write the logic of the python script
 /// directly in Rust. The current version is only for fast developmenet.
-static COUNT_DEP_PY: &str = "../../misc/scripts/compiled_dep_crates.py";
+static _COUNT_DEP_PY: &str = "../../misc/scripts/compiled_dep_crates.py";
 
 /// A node in the call graph.
 ///
@@ -75,7 +76,8 @@ pub type WPSummary = FxHashMap<FnID, FxHashSet<DefSite>>;
 pub(crate) type UnsafeSources = Vec::<(FnID, FxHashSet<DefSite>)>;
 
 /// Count the number of summary files in the temporary summary directory.
-/// Essentiall, it gets the result of `ls | wc -l` and converts it to an u32.
+/// Essentially, it gets the result of `ls | wc -l` and converts it to an u32.
+#[allow(dead_code)]
 fn curr_dep_crate_num(summary_dir: &str) -> io::Result<u32> {
     let ls = Command::new("ls").arg(summary_dir).stdout(Stdio::piped()).spawn()?;
     let wc = Command::new("wc").arg("-l").stdin(ls.stdout.unwrap()).output()?;
@@ -86,17 +88,7 @@ fn curr_dep_crate_num(summary_dir: &str) -> io::Result<u32> {
 /// them to a HashMap for later use.
 fn read_summaries() -> io::Result<FxHashMap<FnID, Summary>> {
     let summary_dir = get_summary_dir();
-    // Check if all dependent summaries are ready.
-    // Run the Python script that counts the number of compiled depdency crates.
-    let dep_crate_num = Command::new(COUNT_DEP_PY).output().unwrap().stdout;
-    let dep_crate_num = String::from_utf8(dep_crate_num).unwrap().as_str().trim()
-                        .parse::<u32>().unwrap();
-    while let Ok(num) = curr_dep_crate_num(&summary_dir)  {
-        if num == dep_crate_num {
-            break;
-        }
-        // Busy waiting
-    }
+    // When the main crate is being compiled, all its dependent should be ready.
 
     let mut dep_summaries = FxHashMap::<FnID, Summary>::default();
     // Collect summaries.
