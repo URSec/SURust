@@ -242,7 +242,7 @@ fn find_unsafe_accesses<'tcx>(unsafe_locals: FxHashSet<Local>, fn_id: FnID,
     (fn_id, unsafe_accesses)
 }
 
-/// Count the total number of accesses of the whole program.
+/// Count the total number of unsafe accesses in the whole crate.
 pub fn unsafe_access_num(unsafe_accesses_all: &Vec::<UnsafeAccesses>) -> usize {
     let mut unsafe_deref_num = 0;
     for unsafe_accesses in unsafe_accesses_all {
@@ -254,6 +254,28 @@ pub fn unsafe_access_num(unsafe_accesses_all: &Vec::<UnsafeAccesses>) -> usize {
     unsafe_deref_num
 }
 
+/// Count the memory accesses in this fn, and update total_deref.
+fn count_access_in_fn<'tcx>(body: &'tcx Body<'tcx>, total_deref: &mut u32) {
+    let mut access_num: u32 = 0;
+    let mut places = Vec::new();
+    for (_bb, bbd) in body.basic_blocks().iter_enumerated() {
+        for (_, stmt) in bbd.statements.iter().enumerate() {
+            get_place_in_stmt(stmt, &mut places);
+        }
+        get_place_in_terminator(body, &bbd.terminator(), &mut places);
+    }
+
+    for place in places {
+        for place_elem in place.projection {
+            match place_elem {
+                ProjectionElem::Deref => { access_num += 1; }
+                _ => {}
+            }
+        }
+    }
+    *total_deref += access_num;
+}
+
 /// Entrance of this module.
 ///
 /// Local analysis to find unsafe memory accesses. It uses the three types of
@@ -263,14 +285,20 @@ pub fn analyze<'tcx>(tcx: TyCtxt<'tcx>, def_id: DefId,
                      unsafe_sources_all: &WPSummary,
                      unsafe_accesses_all: &mut Vec::<UnsafeAccesses>,
                      total_deref: &mut u32) {
-    let fn_id = get_fn_fingerprint(tcx, def_id);
-    let unsafe_sources = unsafe_sources_all.get(&fn_id);
-    if unsafe_sources.is_none() {
-        // This function does not have any unsafe resources.
+    if ignore_fn(tcx, def_id) {
         return;
     }
 
+    let fn_id = get_fn_fingerprint(tcx, def_id);
     let body = tcx.optimized_mir(def_id);
+    let unsafe_sources = unsafe_sources_all.get(&fn_id);
+    if unsafe_sources.is_none() {
+        // This function does not have any unsafe resources. We just count its
+        // memory dereferences.
+        count_access_in_fn(body, total_deref);
+        return;
+    }
+
     // Collect all unsafe Place (represented in Local) based on unsafe sources.
     let unsafe_locals = collect_unsafe_locals(unsafe_sources.unwrap(), &body);
 
