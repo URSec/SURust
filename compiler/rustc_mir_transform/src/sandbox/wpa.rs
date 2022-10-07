@@ -413,6 +413,10 @@ fn find_unsafe_arg_call<'a>(summaries: &FxHashMap<FnID, Summary>,
             _ => {}
         }
     }
+
+    // Print out the number of fn with unsafe sources, and the total number
+    // of functions analyzed.
+    println!("Unsafe_fn / total_fn: {} / {}", wp_summary.len(), summaries.len());
 }
 
 /// Dump the call graph of the main crate for debugging.
