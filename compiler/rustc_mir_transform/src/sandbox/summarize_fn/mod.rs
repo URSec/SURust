@@ -263,7 +263,12 @@ pub fn is_main<'tcx>(tcx: TyCtxt<'tcx>, summary: &Summary) -> bool {
     // Check signature. There might be other main fn which have different
     // signatures than the main() in the application itself.
     let body = tcx.optimized_mir(assemble_def_id(summary.def_id));
-    if body.arg_count == 0 && is_empty_ty(body.return_ty()) { return true; }
+    if body.arg_count == 0 {
+        let ret_ty = body.return_ty();
+        if is_empty_ty(ret_ty) || is_result_ty(tcx, ret_ty) {
+            return true;
+        }
+    }
     return false;
 }
 

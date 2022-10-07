@@ -4,6 +4,7 @@ use rustc_middle::mir::*;
 use rustc_middle::ty::{self, TyCtxt, Ty};
 use rustc_hir::def_id::{DefId,DefIndex,CrateNum,LOCAL_CRATE};
 use rustc_data_structures::fx::{FxHashSet};
+use rustc_span::symbol::{sym};
 use nix::unistd::getppid;
 
 use super::database::*;
@@ -194,6 +195,16 @@ pub(crate) fn is_empty_ty<'tcx>(t: Ty<'tcx>) -> bool {
     }
 
     return false;
+}
+
+/// Check if a type is Result<T, E>.
+pub(crate) fn is_result_ty<'tcx>(tcx: TyCtxt<'tcx>, t: Ty<'tcx>) -> bool {
+    match t.kind() {
+        ty::Adt(adt_def, _) => {
+            tcx.is_diagnostic_item(sym::Result, adt_def.did())
+        },
+        _ => false
+    }
 }
 
 /// Get a function's DefId from a function Constant.
