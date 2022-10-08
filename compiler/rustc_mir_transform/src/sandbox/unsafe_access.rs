@@ -6,6 +6,8 @@ use rustc_middle::mir::*;
 use rustc_hir::def_id::{DefId};
 use rustc_data_structures::fx::{FxHashSet};
 use std::fs;
+use std::path::Path;
+use std::io::Write;
 
 use super::wpa::{WPSummary, UnsafeSources};
 use super::summarize_fn::{DefSite, FnID};
@@ -243,7 +245,7 @@ fn find_unsafe_accesses<'tcx>(unsafe_locals: FxHashSet<Local>, fn_id: FnID,
 }
 
 /// Count the total number of unsafe accesses in the whole crate.
-pub fn unsafe_access_num(unsafe_accesses_all: &Vec::<UnsafeAccesses>) -> usize {
+pub fn unsafe_access_num(unsafe_accesses_all: &Vec::<UnsafeAccesses>) -> u32 {
     let mut unsafe_deref_num = 0;
     for unsafe_accesses in unsafe_accesses_all {
         for unsafe_access in &unsafe_accesses.1 {
@@ -251,7 +253,7 @@ pub fn unsafe_access_num(unsafe_accesses_all: &Vec::<UnsafeAccesses>) -> usize {
         }
     }
 
-    unsafe_deref_num
+    unsafe_deref_num as u32
 }
 
 /// Count the memory accesses in this fn, and update total_deref.
@@ -274,6 +276,24 @@ fn count_access_in_fn<'tcx>(body: &'tcx Body<'tcx>, total_deref: &mut u32) {
         }
     }
     *total_deref += access_num;
+}
+
+/// Write the analysis result to file.
+pub fn write_result(unsafe_access: u32, total_deref: u32) {
+    let file_path = get_deref_result_path();
+    if !Path::new(&file_path).exists() {
+        // Create a new file if not existed.
+        fs::File::create(&file_path).expect("Create a file for result");
+    }
+
+    let result = get_local_crate_name() + ": " + &unsafe_access.to_string() +
+        "/" + &total_deref.to_string() + "\n";
+    let mut file = fs::OpenOptions::new()
+        .append(true)
+        .open(file_path)
+        .expect("Open the result file");
+    file.write_all(result.as_bytes()).expect(
+        "Write the unsafe_deref / total_deref result to file");
 }
 
 /// Entrance of this module.

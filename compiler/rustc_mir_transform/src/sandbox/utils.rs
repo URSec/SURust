@@ -248,6 +248,11 @@ pub(crate) fn get_wp_summary_path() -> String {
     return "/tmp/rust-sandbox-summary".to_owned();
 }
 
+/// Get the path of the memory dereference analysis result file.
+pub(crate) fn get_deref_result_path() -> String {
+    return "/tmp/rust-sandbox-deref".to_owned();
+}
+
 /// Create a DefSite from a function call.
 pub(crate) fn def_site_from_call<'tcx>(f: &Constant<'tcx>, bb_index: u32)
     -> DefSite {

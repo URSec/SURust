@@ -400,7 +400,8 @@ fn sandbox_unsafe<'tcx>(tcx: TyCtxt<'tcx>,
             }
         }
 
-        let _unsafe_deref_num = unsafe_access::unsafe_access_num(&unsafe_accesses_all);
+        let unsafe_deref_num = unsafe_access::unsafe_access_num(&unsafe_accesses_all);
+        unsafe_access::write_result(unsafe_deref_num, total_deref);
 
         return;
     }
