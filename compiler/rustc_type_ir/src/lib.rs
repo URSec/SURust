@@ -1,5 +1,12 @@
+#![feature(associated_type_defaults)]
+#![feature(fmt_helpers_for_derive)]
 #![feature(min_specialization)]
+#![feature(never_type)]
 #![feature(rustc_attrs)]
+#![feature(unwrap_infallible)]
+#![deny(rustc::untranslatable_diagnostic)]
+#![deny(rustc::diagnostic_outside_of_impl)]
+#![allow(internal_features)]
 
 #[macro_use]
 extern crate bitflags;
@@ -15,73 +22,102 @@ use std::hash::Hash;
 use std::mem::discriminant;
 
 pub mod codec;
+pub mod fold;
 pub mod sty;
+pub mod ty_info;
+pub mod visit;
+
+#[macro_use]
+mod macros;
+mod structural_impls;
 
 pub use codec::*;
+pub use structural_impls::{DebugWithInfcx, InferCtxtLike, OptWithInfcx};
 pub use sty::*;
+pub use ty_info::*;
 
-pub trait Interner {
-    type AdtDef: Clone + Debug + Hash + PartialEq + Eq + PartialOrd + Ord;
-    type SubstsRef: Clone + Debug + Hash + PartialEq + Eq + PartialOrd + Ord;
-    type DefId: Clone + Debug + Hash + PartialEq + Eq + PartialOrd + Ord;
-    type Ty: Clone + Debug + Hash + PartialEq + Eq + PartialOrd + Ord;
-    type Const: Clone + Debug + Hash + PartialEq + Eq + PartialOrd + Ord;
-    type Region: Clone + Debug + Hash + PartialEq + Eq + PartialOrd + Ord;
-    type TypeAndMut: Clone + Debug + Hash + PartialEq + Eq + PartialOrd + Ord;
-    type Mutability: Clone + Debug + Hash + PartialEq + Eq + PartialOrd + Ord;
-    type Movability: Clone + Debug + Hash + PartialEq + Eq + PartialOrd + Ord;
-    type PolyFnSig: Clone + Debug + Hash + PartialEq + Eq + PartialOrd + Ord;
-    type ListBinderExistentialPredicate: Clone + Debug + Hash + PartialEq + Eq + PartialOrd + Ord;
-    type BinderListTy: Clone + Debug + Hash + PartialEq + Eq + PartialOrd + Ord;
-    type ListTy: Clone + Debug + Hash + PartialEq + Eq + PartialOrd + Ord;
-    type ProjectionTy: Clone + Debug + Hash + PartialEq + Eq + PartialOrd + Ord;
-    type ParamTy: Clone + Debug + Hash + PartialEq + Eq + PartialOrd + Ord;
-    type BoundTy: Clone + Debug + Hash + PartialEq + Eq + PartialOrd + Ord;
-    type PlaceholderType: Clone + Debug + Hash + PartialEq + Eq + PartialOrd + Ord;
-    type InferTy: Clone + Debug + Hash + PartialEq + Eq + PartialOrd + Ord;
-    type DelaySpanBugEmitted: Clone + Debug + Hash + PartialEq + Eq + PartialOrd + Ord;
+/// Needed so we can use #[derive(HashStable_Generic)]
+pub trait HashStableContext {}
+
+pub trait Interner: Sized {
+    type AdtDef: Clone + Debug + Hash + Ord;
+    type GenericArgsRef: Clone
+        + DebugWithInfcx<Self>
+        + Hash
+        + Ord
+        + IntoIterator<Item = Self::GenericArg>;
+    type GenericArg: Clone + DebugWithInfcx<Self> + Hash + Ord;
+    type DefId: Clone + Debug + Hash + Ord;
+    type Binder<T>;
+    type Ty: Clone + DebugWithInfcx<Self> + Hash + Ord;
+    type Const: Clone + DebugWithInfcx<Self> + Hash + Ord;
+    type Region: Clone + DebugWithInfcx<Self> + Hash + Ord;
+    type Predicate;
+    type TypeAndMut: Clone + Debug + Hash + Ord;
+    type Mutability: Clone + Debug + Hash + Ord;
+    type Movability: Clone + Debug + Hash + Ord;
+    type PolyFnSig: Clone + DebugWithInfcx<Self> + Hash + Ord;
+    type ListBinderExistentialPredicate: Clone + DebugWithInfcx<Self> + Hash + Ord;
+    type BinderListTy: Clone + DebugWithInfcx<Self> + Hash + Ord;
+    type ListTy: Clone + Debug + Hash + Ord + IntoIterator<Item = Self::Ty>;
+    type AliasTy: Clone + DebugWithInfcx<Self> + Hash + Ord;
+    type ParamTy: Clone + Debug + Hash + Ord;
+    type BoundTy: Clone + Debug + Hash + Ord;
+    type PlaceholderType: Clone + Debug + Hash + Ord;
+    type InferTy: Clone + DebugWithInfcx<Self> + Hash + Ord;
+    type ErrorGuaranteed: Clone + Debug + Hash + Ord;
     type PredicateKind: Clone + Debug + Hash + PartialEq + Eq;
-    type AllocId: Clone + Debug + Hash + PartialEq + Eq + PartialOrd + Ord;
+    type AllocId: Clone + Debug + Hash + Ord;
 
-    type EarlyBoundRegion: Clone + Debug + Hash + PartialEq + Eq + PartialOrd + Ord;
-    type BoundRegion: Clone + Debug + Hash + PartialEq + Eq + PartialOrd + Ord;
-    type FreeRegion: Clone + Debug + Hash + PartialEq + Eq + PartialOrd + Ord;
-    type RegionVid: Clone + Debug + Hash + PartialEq + Eq + PartialOrd + Ord;
-    type PlaceholderRegion: Clone + Debug + Hash + PartialEq + Eq + PartialOrd + Ord;
+    type InferConst: Clone + DebugWithInfcx<Self> + Hash + Ord;
+    type AliasConst: Clone + DebugWithInfcx<Self> + Hash + Ord;
+    type PlaceholderConst: Clone + Debug + Hash + Ord;
+    type ParamConst: Clone + Debug + Hash + Ord;
+    type BoundConst: Clone + Debug + Hash + Ord;
+    type ValueConst: Clone + Debug + Hash + Ord;
+    type ExprConst: Clone + DebugWithInfcx<Self> + Hash + Ord;
+
+    type EarlyBoundRegion: Clone + Debug + Hash + Ord;
+    type BoundRegion: Clone + Debug + Hash + Ord;
+    type FreeRegion: Clone + Debug + Hash + Ord;
+    type RegionVid: Clone + DebugWithInfcx<Self> + Hash + Ord;
+    type PlaceholderRegion: Clone + Debug + Hash + Ord;
+
+    fn ty_and_mut_to_parts(ty_and_mut: Self::TypeAndMut) -> (Self::Ty, Self::Mutability);
+    fn mutability_is_mut(mutbl: Self::Mutability) -> bool;
 }
 
-pub trait InternAs<T: ?Sized, R> {
+/// Imagine you have a function `F: FnOnce(&[T]) -> R`, plus an iterator `iter`
+/// that produces `T` items. You could combine them with
+/// `f(&iter.collect::<Vec<_>>())`, but this requires allocating memory for the
+/// `Vec`.
+///
+/// This trait allows for faster implementations, intended for cases where the
+/// number of items produced by the iterator is small. There is a blanket impl
+/// for `T` items, but there is also a fallible impl for `Result<T, E>` items.
+pub trait CollectAndApply<T, R>: Sized {
     type Output;
-    fn intern_with<F>(self, f: F) -> Self::Output
+
+    /// Produce a result of type `Self::Output` from `iter`. The result will
+    /// typically be produced by applying `f` on the elements produced by
+    /// `iter`, though this may not happen in some impls, e.g. if an error
+    /// occurred during iteration.
+    fn collect_and_apply<I, F>(iter: I, f: F) -> Self::Output
     where
-        F: FnOnce(&T) -> R;
+        I: Iterator<Item = Self>,
+        F: FnOnce(&[T]) -> R;
 }
 
-impl<I, T, R, E> InternAs<[T], R> for I
-where
-    E: InternIteratorElement<T, R>,
-    I: Iterator<Item = E>,
-{
-    type Output = E::Output;
-    fn intern_with<F>(self, f: F) -> Self::Output
+/// The blanket impl that always collects all elements and applies `f`.
+impl<T, R> CollectAndApply<T, R> for T {
+    type Output = R;
+
+    /// Equivalent to `f(&iter.collect::<Vec<_>>())`.
+    fn collect_and_apply<I, F>(mut iter: I, f: F) -> R
     where
+        I: Iterator<Item = T>,
         F: FnOnce(&[T]) -> R,
     {
-        E::intern_with(self, f)
-    }
-}
-
-pub trait InternIteratorElement<T, R>: Sized {
-    type Output;
-    fn intern_with<I: Iterator<Item = Self>, F: FnOnce(&[T]) -> R>(iter: I, f: F) -> Self::Output;
-}
-
-impl<T, R> InternIteratorElement<T, R> for T {
-    type Output = R;
-    fn intern_with<I: Iterator<Item = Self>, F: FnOnce(&[T]) -> R>(
-        mut iter: I,
-        f: F,
-    ) -> Self::Output {
         // This code is hot enough that it's worth specializing for the most
         // common length lists, to avoid the overhead of `SmallVec` creation.
         // Lengths 0, 1, and 2 typically account for ~95% of cases. If
@@ -108,23 +144,17 @@ impl<T, R> InternIteratorElement<T, R> for T {
     }
 }
 
-impl<'a, T, R> InternIteratorElement<T, R> for &'a T
-where
-    T: Clone + 'a,
-{
-    type Output = R;
-    fn intern_with<I: Iterator<Item = Self>, F: FnOnce(&[T]) -> R>(iter: I, f: F) -> Self::Output {
-        // This code isn't hot.
-        f(&iter.cloned().collect::<SmallVec<[_; 8]>>())
-    }
-}
-
-impl<T, R, E> InternIteratorElement<T, R> for Result<T, E> {
+/// A fallible impl that will fail, without calling `f`, if there are any
+/// errors during collection.
+impl<T, R, E> CollectAndApply<T, R> for Result<T, E> {
     type Output = Result<R, E>;
-    fn intern_with<I: Iterator<Item = Self>, F: FnOnce(&[T]) -> R>(
-        mut iter: I,
-        f: F,
-    ) -> Self::Output {
+
+    /// Equivalent to `Ok(f(&iter.collect::<Result<Vec<_>>>()?))`.
+    fn collect_and_apply<I, F>(mut iter: I, f: F) -> Result<R, E>
+    where
+        I: Iterator<Item = Result<T, E>>,
+        F: FnOnce(&[T]) -> R,
+    {
         // This code is hot enough that it's worth specializing for the most
         // common length lists, to avoid the overhead of `SmallVec` creation.
         // Lengths 0, 1, and 2 typically account for ~95% of cases. If
@@ -167,7 +197,7 @@ bitflags! {
         /// Does this have `ConstKind::Param`?
         const HAS_CT_PARAM                = 1 << 2;
 
-        const NEEDS_SUBST                 = TypeFlags::HAS_TY_PARAM.bits
+        const HAS_PARAM                 = TypeFlags::HAS_TY_PARAM.bits
                                           | TypeFlags::HAS_RE_PARAM.bits
                                           | TypeFlags::HAS_CT_PARAM.bits;
 
@@ -180,7 +210,7 @@ bitflags! {
 
         /// Does this have inference variables? Used to determine whether
         /// inference is required.
-        const NEEDS_INFER                 = TypeFlags::HAS_TY_INFER.bits
+        const HAS_INFER                 = TypeFlags::HAS_TY_INFER.bits
                                           | TypeFlags::HAS_RE_INFER.bits
                                           | TypeFlags::HAS_CT_INFER.bits;
 
@@ -190,6 +220,11 @@ bitflags! {
         const HAS_RE_PLACEHOLDER          = 1 << 7;
         /// Does this have `ConstKind::Placeholder`?
         const HAS_CT_PLACEHOLDER          = 1 << 8;
+
+        /// Does this have placeholders?
+        const HAS_PLACEHOLDER           = TypeFlags::HAS_TY_PLACEHOLDER.bits
+                                          | TypeFlags::HAS_RE_PLACEHOLDER.bits
+                                          | TypeFlags::HAS_CT_PLACEHOLDER.bits;
 
         /// `true` if there are "names" of regions and so forth
         /// that are local to a particular fn/inferctxt
@@ -212,43 +247,61 @@ bitflags! {
                                           // which is different from how types/const are freshened.
                                           | TypeFlags::HAS_TY_FRESH.bits
                                           | TypeFlags::HAS_CT_FRESH.bits
-                                          | TypeFlags::HAS_FREE_LOCAL_REGIONS.bits;
+                                          | TypeFlags::HAS_FREE_LOCAL_REGIONS.bits
+                                          | TypeFlags::HAS_RE_ERASED.bits;
 
         /// Does this have `Projection`?
         const HAS_TY_PROJECTION           = 1 << 10;
+        /// Does this have `Inherent`?
+        const HAS_TY_INHERENT             = 1 << 11;
         /// Does this have `Opaque`?
-        const HAS_TY_OPAQUE               = 1 << 11;
+        const HAS_TY_OPAQUE               = 1 << 12;
         /// Does this have `ConstKind::Unevaluated`?
-        const HAS_CT_PROJECTION           = 1 << 12;
+        const HAS_CT_PROJECTION           = 1 << 13;
 
         /// Could this type be normalized further?
         const HAS_PROJECTION              = TypeFlags::HAS_TY_PROJECTION.bits
                                           | TypeFlags::HAS_TY_OPAQUE.bits
+                                          | TypeFlags::HAS_TY_INHERENT.bits
                                           | TypeFlags::HAS_CT_PROJECTION.bits;
 
         /// Is an error type/const reachable?
-        const HAS_ERROR                   = 1 << 13;
+        const HAS_ERROR                   = 1 << 14;
 
         /// Does this have any region that "appears free" in the type?
         /// Basically anything but `ReLateBound` and `ReErased`.
-        const HAS_FREE_REGIONS            = 1 << 14;
+        const HAS_FREE_REGIONS            = 1 << 15;
 
-        /// Does this have any `ReLateBound` regions? Used to check
-        /// if a global bound is safe to evaluate.
-        const HAS_RE_LATE_BOUND           = 1 << 15;
+        /// Does this have any `ReLateBound` regions?
+        const HAS_RE_LATE_BOUND           = 1 << 16;
+        /// Does this have any `Bound` types?
+        const HAS_TY_LATE_BOUND           = 1 << 17;
+        /// Does this have any `ConstKind::Bound` consts?
+        const HAS_CT_LATE_BOUND           = 1 << 18;
+        /// Does this have any bound variables?
+        /// Used to check if a global bound is safe to evaluate.
+        const HAS_LATE_BOUND              = TypeFlags::HAS_RE_LATE_BOUND.bits
+                                          | TypeFlags::HAS_TY_LATE_BOUND.bits
+                                          | TypeFlags::HAS_CT_LATE_BOUND.bits;
 
         /// Does this have any `ReErased` regions?
-        const HAS_RE_ERASED               = 1 << 16;
+        const HAS_RE_ERASED               = 1 << 19;
 
         /// Does this value have parameters/placeholders/inference variables which could be
         /// replaced later, in a way that would change the results of `impl` specialization?
-        const STILL_FURTHER_SPECIALIZABLE = 1 << 17;
+        const STILL_FURTHER_SPECIALIZABLE = 1 << 20;
 
         /// Does this value have `InferTy::FreshTy/FreshIntTy/FreshFloatTy`?
-        const HAS_TY_FRESH                = 1 << 18;
+        const HAS_TY_FRESH                = 1 << 21;
 
         /// Does this value have `InferConst::Fresh`?
-        const HAS_CT_FRESH                = 1 << 19;
+        const HAS_CT_FRESH                = 1 << 22;
+
+        /// Does this have `Generator` or `GeneratorWitness`?
+        const HAS_TY_GENERATOR            = 1 << 23;
+
+        /// Does this have any binders with bound vars (e.g. that need to be anonymized)?
+        const HAS_BINDER_VARS             = 1 << 24;
     }
 }
 
@@ -292,9 +345,10 @@ rustc_index::newtype_index! {
     /// is the outer fn.
     ///
     /// [dbi]: https://en.wikipedia.org/wiki/De_Bruijn_index
+    #[derive(HashStable_Generic)]
+    #[debug_format = "DebruijnIndex({})"]
     pub struct DebruijnIndex {
-        DEBUG_FORMAT = "DebruijnIndex({})",
-        const INNERMOST = 0,
+        const INNERMOST = 0;
     }
 }
 
@@ -309,6 +363,7 @@ impl DebruijnIndex {
     ///    for<'a> fn(for<'b> fn(&'a x))
     ///
     /// you would need to shift the index for `'a` into a new binder.
+    #[inline]
     #[must_use]
     pub fn shifted_in(self, amount: u32) -> DebruijnIndex {
         DebruijnIndex::from_u32(self.as_u32() + amount)
@@ -316,18 +371,21 @@ impl DebruijnIndex {
 
     /// Update this index in place by shifting it "in" through
     /// `amount` number of binders.
+    #[inline]
     pub fn shift_in(&mut self, amount: u32) {
         *self = self.shifted_in(amount);
     }
 
     /// Returns the resulting index when this value is moved out from
     /// `amount` number of new binders.
+    #[inline]
     #[must_use]
     pub fn shifted_out(self, amount: u32) -> DebruijnIndex {
         DebruijnIndex::from_u32(self.as_u32() - amount)
     }
 
     /// Update in place by shifting out from `amount` binders.
+    #[inline]
     pub fn shift_out(&mut self, amount: u32) {
         *self = self.shifted_out(amount);
     }
@@ -352,13 +410,26 @@ impl DebruijnIndex {
     /// If we invoke `shift_out_to_binder` and the region is in fact
     /// bound by one of the binders we are shifting out of, that is an
     /// error (and should fail an assertion failure).
+    #[inline]
     pub fn shifted_out_to_binder(self, to_binder: DebruijnIndex) -> Self {
         self.shifted_out(to_binder.as_u32() - INNERMOST.as_u32())
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
-#[derive(Encodable, Decodable)]
+pub fn debug_bound_var<T: std::fmt::Write>(
+    fmt: &mut T,
+    debruijn: DebruijnIndex,
+    var: impl std::fmt::Debug,
+) -> Result<(), std::fmt::Error> {
+    if debruijn == INNERMOST {
+        write!(fmt, "^{var:?}")
+    } else {
+        write!(fmt, "^{}_{:?}", debruijn.index(), var)
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Encodable, Decodable, HashStable_Generic)]
 pub enum IntTy {
     Isize,
     I8,
@@ -402,10 +473,21 @@ impl IntTy {
             _ => *self,
         }
     }
+
+    pub fn to_unsigned(self) -> UintTy {
+        match self {
+            IntTy::Isize => UintTy::Usize,
+            IntTy::I8 => UintTy::U8,
+            IntTy::I16 => UintTy::U16,
+            IntTy::I32 => UintTy::U32,
+            IntTy::I64 => UintTy::U64,
+            IntTy::I128 => UintTy::U128,
+        }
+    }
 }
 
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Copy, Debug)]
-#[derive(Encodable, Decodable)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Copy)]
+#[derive(Encodable, Decodable, HashStable_Generic)]
 pub enum UintTy {
     Usize,
     U8,
@@ -449,10 +531,21 @@ impl UintTy {
             _ => *self,
         }
     }
+
+    pub fn to_signed(self) -> IntTy {
+        match self {
+            UintTy::Usize => IntTy::Isize,
+            UintTy::U8 => IntTy::I8,
+            UintTy::U16 => IntTy::I16,
+            UintTy::U32 => IntTy::I32,
+            UintTy::U64 => IntTy::I64,
+            UintTy::U128 => IntTy::I128,
+        }
+    }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
-#[derive(Encodable, Decodable)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Encodable, Decodable, HashStable_Generic)]
 pub enum FloatTy {
     F32,
     F64,
@@ -485,21 +578,20 @@ pub struct FloatVarValue(pub FloatTy);
 
 rustc_index::newtype_index! {
     /// A **ty**pe **v**ariable **ID**.
-    pub struct TyVid {
-        DEBUG_FORMAT = "_#{}t"
-    }
+    #[debug_format = "?{}t"]
+    pub struct TyVid {}
 }
 
-/// An **int**egral (`u32`, `i32`, `usize`, etc.) type **v**ariable **ID**.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Encodable, Decodable)]
-pub struct IntVid {
-    pub index: u32,
+rustc_index::newtype_index! {
+    /// An **int**egral (`u32`, `i32`, `usize`, etc.) type **v**ariable **ID**.
+    #[debug_format = "?{}i"]
+    pub struct IntVid {}
 }
 
-/// An **float**ing-point (`f32` or `f64`) type **v**ariable **ID**.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Encodable, Decodable)]
-pub struct FloatVid {
-    pub index: u32,
+rustc_index::newtype_index! {
+    /// A **float**ing-point (`f32` or `f64`) type **v**ariable **ID**.
+    #[debug_format = "?{}f"]
+    pub struct FloatVid {}
 }
 
 /// A placeholder for a type that hasn't been inferred yet.
@@ -561,11 +653,11 @@ impl UnifyKey for IntVid {
     type Value = Option<IntVarValue>;
     #[inline] // make this function eligible for inlining - it is quite hot.
     fn index(&self) -> u32 {
-        self.index
+        self.as_u32()
     }
     #[inline]
     fn from_index(i: u32) -> IntVid {
-        IntVid { index: i }
+        IntVid::from_u32(i)
     }
     fn tag() -> &'static str {
         "IntVid"
@@ -578,18 +670,19 @@ impl UnifyKey for FloatVid {
     type Value = Option<FloatVarValue>;
     #[inline]
     fn index(&self) -> u32 {
-        self.index
+        self.as_u32()
     }
     #[inline]
     fn from_index(i: u32) -> FloatVid {
-        FloatVid { index: i }
+        FloatVid::from_u32(i)
     }
     fn tag() -> &'static str {
         "FloatVid"
     }
 }
 
-#[derive(Copy, Clone, PartialEq, Decodable, Encodable, Hash)]
+#[derive(Copy, Clone, PartialEq, Eq, Decodable, Encodable, Hash, HashStable_Generic)]
+#[rustc_pass_by_value]
 pub enum Variance {
     Covariant,     // T<A> <: T<B> iff A <: B -- e.g., function return type
     Invariant,     // T<A> <: T<B> iff B == A -- e.g., type of mutable cell
@@ -657,46 +750,16 @@ impl Variance {
     }
 }
 
-impl<CTX> HashStable<CTX> for DebruijnIndex {
-    fn hash_stable(&self, ctx: &mut CTX, hasher: &mut StableHasher) {
-        self.as_u32().hash_stable(ctx, hasher);
-    }
-}
-
-impl<CTX> HashStable<CTX> for IntTy {
-    fn hash_stable(&self, ctx: &mut CTX, hasher: &mut StableHasher) {
-        discriminant(self).hash_stable(ctx, hasher);
-    }
-}
-
-impl<CTX> HashStable<CTX> for UintTy {
-    fn hash_stable(&self, ctx: &mut CTX, hasher: &mut StableHasher) {
-        discriminant(self).hash_stable(ctx, hasher);
-    }
-}
-
-impl<CTX> HashStable<CTX> for FloatTy {
-    fn hash_stable(&self, ctx: &mut CTX, hasher: &mut StableHasher) {
-        discriminant(self).hash_stable(ctx, hasher);
-    }
-}
-
 impl<CTX> HashStable<CTX> for InferTy {
     fn hash_stable(&self, ctx: &mut CTX, hasher: &mut StableHasher) {
         use InferTy::*;
         discriminant(self).hash_stable(ctx, hasher);
         match self {
-            TyVar(v) => v.as_u32().hash_stable(ctx, hasher),
-            IntVar(v) => v.index.hash_stable(ctx, hasher),
-            FloatVar(v) => v.index.hash_stable(ctx, hasher),
+            TyVar(_) | IntVar(_) | FloatVar(_) => {
+                panic!("type variables should not be hashed: {self:?}")
+            }
             FreshTy(v) | FreshIntTy(v) | FreshFloatTy(v) => v.hash_stable(ctx, hasher),
         }
-    }
-}
-
-impl<CTX> HashStable<CTX> for Variance {
-    fn hash_stable(&self, ctx: &mut CTX, hasher: &mut StableHasher) {
-        discriminant(self).hash_stable(ctx, hasher);
     }
 }
 
@@ -712,32 +775,6 @@ impl fmt::Debug for IntVarValue {
 impl fmt::Debug for FloatVarValue {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.0.fmt(f)
-    }
-}
-
-impl fmt::Debug for IntVid {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "_#{}i", self.index)
-    }
-}
-
-impl fmt::Debug for FloatVid {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "_#{}f", self.index)
-    }
-}
-
-impl fmt::Debug for InferTy {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        use InferTy::*;
-        match *self {
-            TyVar(ref v) => v.fmt(f),
-            IntVar(ref v) => v.fmt(f),
-            FloatVar(ref v) => v.fmt(f),
-            FreshTy(v) => write!(f, "FreshTy({:?})", v),
-            FreshIntTy(v) => write!(f, "FreshIntTy({:?})", v),
-            FreshFloatTy(v) => write!(f, "FreshFloatTy({:?})", v),
-        }
     }
 }
 
@@ -759,9 +796,9 @@ impl fmt::Display for InferTy {
             TyVar(_) => write!(f, "_"),
             IntVar(_) => write!(f, "{}", "{integer}"),
             FloatVar(_) => write!(f, "{}", "{float}"),
-            FreshTy(v) => write!(f, "FreshTy({})", v),
-            FreshIntTy(v) => write!(f, "FreshIntTy({})", v),
-            FreshFloatTy(v) => write!(f, "FreshFloatTy({})", v),
+            FreshTy(v) => write!(f, "FreshTy({v})"),
+            FreshIntTy(v) => write!(f, "FreshIntTy({v})"),
+            FreshFloatTy(v) => write!(f, "FreshFloatTy({v})"),
         }
     }
 }
@@ -802,9 +839,9 @@ rustc_index::newtype_index! {
     /// declared, but a type name in a non-zero universe is a placeholder
     /// type -- an idealized representative of "types in general" that we
     /// use for checking generic functions.
-    pub struct UniverseIndex {
-        DEBUG_FORMAT = "U{}",
-    }
+    #[derive(HashStable_Generic)]
+    #[debug_format = "U{}"]
+    pub struct UniverseIndex {}
 }
 
 impl UniverseIndex {
@@ -839,11 +876,5 @@ impl UniverseIndex {
     /// those in `other` (`self < other`).
     pub fn cannot_name(self, other: UniverseIndex) -> bool {
         self.private < other.private
-    }
-}
-
-impl<CTX> HashStable<CTX> for UniverseIndex {
-    fn hash_stable(&self, ctx: &mut CTX, hasher: &mut StableHasher) {
-        self.private.hash_stable(ctx, hasher);
     }
 }

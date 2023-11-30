@@ -32,6 +32,7 @@ impl Drop for Handler {
     target_os = "macos",
     target_os = "dragonfly",
     target_os = "freebsd",
+    target_os = "hurd",
     target_os = "solaris",
     target_os = "illumos",
     target_os = "netbsd",
@@ -45,7 +46,10 @@ mod imp {
     use crate::thread;
 
     use libc::MAP_FAILED;
-    use libc::{mmap, munmap};
+    #[cfg(not(all(target_os = "linux", target_env = "gnu")))]
+    use libc::{mmap as mmap64, munmap};
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    use libc::{mmap64, munmap};
     use libc::{sigaction, sighandler_t, SA_ONSTACK, SA_SIGINFO, SIGBUS, SIG_DFL};
     use libc::{sigaltstack, SIGSTKSZ, SS_DISABLE};
     use libc::{MAP_ANON, MAP_PRIVATE, PROT_NONE, PROT_READ, PROT_WRITE, SIGSEGV};
@@ -135,7 +139,7 @@ mod imp {
         #[cfg(not(any(target_os = "openbsd", target_os = "netbsd", target_os = "linux",)))]
         let flags = MAP_PRIVATE | MAP_ANON;
         let stackp =
-            mmap(ptr::null_mut(), SIGSTKSZ + page_size(), PROT_READ | PROT_WRITE, flags, -1, 0);
+            mmap64(ptr::null_mut(), SIGSTKSZ + page_size(), PROT_READ | PROT_WRITE, flags, -1, 0);
         if stackp == MAP_FAILED {
             panic!("failed to allocate an alternative stack: {}", io::Error::last_os_error());
         }
@@ -190,6 +194,7 @@ mod imp {
     target_os = "macos",
     target_os = "dragonfly",
     target_os = "freebsd",
+    target_os = "hurd",
     target_os = "solaris",
     target_os = "illumos",
     target_os = "netbsd",

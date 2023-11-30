@@ -1,3 +1,5 @@
+#![deny(rustc::untranslatable_diagnostic)]
+#![deny(rustc::diagnostic_outside_of_impl)]
 use rustc_middle::mir::visit::{
     MutatingUseContext, NonMutatingUseContext, NonUseContext, PlaceContext,
 };
@@ -47,15 +49,18 @@ pub fn categorize(context: PlaceContext) -> Option<DefUse> {
         // cross suspension points so this behavior is unproblematic.
         PlaceContext::MutatingUse(MutatingUseContext::Borrow) |
         PlaceContext::NonMutatingUse(NonMutatingUseContext::SharedBorrow) |
-        PlaceContext::NonMutatingUse(NonMutatingUseContext::ShallowBorrow) |
-        PlaceContext::NonMutatingUse(NonMutatingUseContext::UniqueBorrow) |
+        PlaceContext::NonMutatingUse(NonMutatingUseContext::FakeBorrow) |
+
+        // `PlaceMention` and `AscribeUserType` both evaluate the place, which must not
+        // contain dangling references.
+        PlaceContext::NonMutatingUse(NonMutatingUseContext::PlaceMention) |
+        PlaceContext::NonUse(NonUseContext::AscribeUserTy(_)) |
 
         PlaceContext::MutatingUse(MutatingUseContext::AddressOf) |
         PlaceContext::NonMutatingUse(NonMutatingUseContext::AddressOf) |
         PlaceContext::NonMutatingUse(NonMutatingUseContext::Inspect) |
         PlaceContext::NonMutatingUse(NonMutatingUseContext::Copy) |
         PlaceContext::NonMutatingUse(NonMutatingUseContext::Move) |
-        PlaceContext::NonUse(NonUseContext::AscribeUserTy) |
         PlaceContext::MutatingUse(MutatingUseContext::Retag) =>
             Some(DefUse::Use),
 

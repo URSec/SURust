@@ -58,7 +58,7 @@ fn find_duplicates(body: &Body<'_>) -> FxHashMap<BasicBlock, BasicBlock> {
     let mut duplicates = FxHashMap::default();
 
     let bbs_to_go_through =
-        body.basic_blocks().iter_enumerated().filter(|(_, bbd)| !bbd.is_cleanup).count();
+        body.basic_blocks.iter_enumerated().filter(|(_, bbd)| !bbd.is_cleanup).count();
 
     let mut same_hashes =
         FxHashMap::with_capacity_and_hasher(bbs_to_go_through, Default::default());
@@ -71,8 +71,7 @@ fn find_duplicates(body: &Body<'_>) -> FxHashMap<BasicBlock, BasicBlock> {
     // When we see bb1, we see that it is a duplicate of bb3, and therefore insert it in the duplicates list
     // with replacement bb3.
     // When the duplicates are removed, we will end up with only bb3.
-    for (bb, bbd) in body.basic_blocks().iter_enumerated().rev().filter(|(_, bbd)| !bbd.is_cleanup)
-    {
+    for (bb, bbd) in body.basic_blocks.iter_enumerated().rev().filter(|(_, bbd)| !bbd.is_cleanup) {
         // Basic blocks can get really big, so to avoid checking for duplicates in basic blocks
         // that are unlikely to have duplicates, we stop early. The early bail number has been
         // found experimentally by eprintln while compiling the crates in the rustc-perf suite.
@@ -151,7 +150,7 @@ fn rvalue_hash<H: Hasher>(hasher: &mut H, rvalue: &Rvalue<'_>) {
 
 fn operand_hash<H: Hasher>(hasher: &mut H, operand: &Operand<'_>) {
     match operand {
-        Operand::Constant(box Constant { user_ty: _, literal, span: _ }) => literal.hash(hasher),
+        Operand::Constant(box ConstOperand { user_ty: _, const_, span: _ }) => const_.hash(hasher),
         x => x.hash(hasher),
     };
 }
@@ -180,9 +179,9 @@ fn rvalue_eq<'tcx>(lhs: &Rvalue<'tcx>, rhs: &Rvalue<'tcx>) -> bool {
 fn operand_eq<'tcx>(lhs: &Operand<'tcx>, rhs: &Operand<'tcx>) -> bool {
     let res = match (lhs, rhs) {
         (
-            Operand::Constant(box Constant { user_ty: _, literal, span: _ }),
-            Operand::Constant(box Constant { user_ty: _, literal: literal2, span: _ }),
-        ) => literal == literal2,
+            Operand::Constant(box ConstOperand { user_ty: _, const_, span: _ }),
+            Operand::Constant(box ConstOperand { user_ty: _, const_: const2, span: _ }),
+        ) => const_ == const2,
         (x, y) => x == y,
     };
     debug!("operand_eq lhs: `{:?}` rhs: `{:?}` result: {:?}", lhs, rhs, res);

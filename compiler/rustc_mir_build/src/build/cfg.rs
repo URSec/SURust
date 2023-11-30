@@ -49,7 +49,7 @@ impl<'tcx> CFG<'tcx> {
         block: BasicBlock,
         source_info: SourceInfo,
         temp: Place<'tcx>,
-        constant: Constant<'tcx>,
+        constant: ConstOperand<'tcx>,
     ) {
         self.push_assign(
             block,
@@ -70,10 +70,10 @@ impl<'tcx> CFG<'tcx> {
             block,
             source_info,
             place,
-            Rvalue::Use(Operand::Constant(Box::new(Constant {
+            Rvalue::Use(Operand::Constant(Box::new(ConstOperand {
                 span: source_info.span,
                 user_ty: None,
-                literal: ConstantKind::zero_sized(tcx.types.unit),
+                const_: Const::zero_sized(tcx.types.unit),
             }))),
         );
     }
@@ -86,6 +86,17 @@ impl<'tcx> CFG<'tcx> {
         place: Place<'tcx>,
     ) {
         let kind = StatementKind::FakeRead(Box::new((cause, place)));
+        let stmt = Statement { source_info, kind };
+        self.push(block, stmt);
+    }
+
+    pub(crate) fn push_place_mention(
+        &mut self,
+        block: BasicBlock,
+        source_info: SourceInfo,
+        place: Place<'tcx>,
+    ) {
+        let kind = StatementKind::PlaceMention(Box::new(place));
         let stmt = Statement { source_info, kind };
         self.push(block, stmt);
     }

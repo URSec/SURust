@@ -48,11 +48,19 @@ declare_features! (
 
     /// Allows `#[target_feature(...)]` on aarch64 platforms
     (accepted, aarch64_target_feature, "1.61.0", Some(44839), None),
+    /// Allows using the `efiapi` ABI.
+    (accepted, abi_efiapi, "1.68.0", Some(65815), None),
     /// Allows the sysV64 ABI to be specified on all platforms
     /// instead of just the platforms on which it is the C ABI.
     (accepted, abi_sysv64, "1.24.0", Some(36167), None),
+    /// Allows using the `thiscall` ABI.
+    (accepted, abi_thiscall, "1.73.0", None, None),
     /// Allows using ADX intrinsics from `core::arch::{x86, x86_64}`.
     (accepted, adx_target_feature, "1.61.0", Some(44839), None),
+    /// Allows explicit discriminants on non-unit enum variants.
+    (accepted, arbitrary_enum_discriminant, "1.66.0", Some(60553), None),
+    /// Allows using `sym` operands in inline assembly.
+    (accepted, asm_sym, "1.66.0", Some(93333), None),
     /// Allows the definition of associated constants in `trait` or `impl` blocks.
     (accepted, associated_consts, "1.20.0", Some(29646), None),
     /// Allows using associated `type`s in `trait`s.
@@ -84,6 +92,8 @@ declare_features! (
     (accepted, clone_closures, "1.26.0", Some(44490), None),
     /// Allows coercing non capturing closures to function pointers.
     (accepted, closure_to_fn_coercion, "1.19.0", Some(39817), None),
+    /// Allows using the CMPXCHG16B target feature.
+    (accepted, cmpxchg16b_target_feature, "1.69.0", Some(44839), None),
     /// Allows usage of the `compile_error!` macro.
     (accepted, compile_error, "1.20.0", Some(40872), None),
     /// Allows `impl Trait` in function return types.
@@ -122,6 +132,10 @@ declare_features! (
     (accepted, copy_closures, "1.26.0", Some(44490), None),
     /// Allows `crate` in paths.
     (accepted, crate_in_paths, "1.30.0", Some(45477), None),
+    /// Allows using `#[debugger_visualizer]` attribute.
+    (accepted, debugger_visualizer, "1.71.0", Some(95939), None),
+    /// Allows rustc to inject a default alloc_error_handler
+    (accepted, default_alloc_error_handler, "1.68.0", Some(66741), None),
     /// Allows using assigning a default type to type parameters in algebraic data type definitions.
     (accepted, default_type_params, "1.0.0", None, None),
     /// Allows `#[deprecated]` attribute.
@@ -155,18 +169,24 @@ declare_features! (
     (accepted, extern_crate_self, "1.34.0", Some(56409), None),
     /// Allows access to crate names passed via `--extern` through prelude.
     (accepted, extern_prelude, "1.30.0", Some(44660), None),
+    /// Allows using F16C intrinsics from `core::arch::{x86, x86_64}`.
+    (accepted, f16c_target_feature, "1.68.0", Some(44839), None),
     /// Allows field shorthands (`x` meaning `x: x`) in struct literal expressions.
     (accepted, field_init_shorthand, "1.17.0", Some(37340), None),
     /// Allows `#[must_use]` on functions, and introduces must-use operators (RFC 1940).
     (accepted, fn_must_use, "1.27.0", Some(43302), None),
     /// Allows capturing variables in scope using format_args!
     (accepted, format_args_capture, "1.58.0", Some(67984), None),
+    /// Allows associated types to be generic, e.g., `type Foo<T>;` (RFC 1598).
+    (accepted, generic_associated_types, "1.65.0", Some(44265), None),
     /// Allows attributes on lifetime/type formal parameters in generics (RFC 1327).
     (accepted, generic_param_attrs, "1.27.0", Some(48848), None),
     /// Allows the `#[global_allocator]` attribute.
     (accepted, global_allocator, "1.28.0", Some(27389), None),
     // FIXME: explain `globs`.
     (accepted, globs, "1.0.0", None, None),
+    /// Allows using `..=X` as a pattern.
+    (accepted, half_open_range_patterns, "1.66.0", Some(67264), None),
     /// Allows using the `u128` and `i128` types.
     (accepted, i128_type, "1.26.0", Some(35118), None),
     /// Allows the use of `if let` expressions.
@@ -177,15 +197,23 @@ declare_features! (
     /// + `impl<I:Iterator> Iterator for &mut Iterator`
     /// + `impl Debug for Foo<'_>`
     (accepted, impl_header_lifetime_elision, "1.31.0", Some(15872), None),
+    /// Allows referencing `Self` and projections in impl-trait.
+    (accepted, impl_trait_projections, "1.74.0", Some(103532), None),
     /// Allows using `a..=b` and `..=b` as inclusive range syntaxes.
     (accepted, inclusive_range_syntax, "1.26.0", Some(28237), None),
     /// Allows inferring outlives requirements (RFC 2093).
     (accepted, infer_outlives_requirements, "1.30.0", Some(44493), None),
     /// Allows irrefutable patterns in `if let` and `while let` statements (RFC 2086).
     (accepted, irrefutable_let_patterns, "1.33.0", Some(44495), None),
+    /// Allows `#[instruction_set(_)]` attribute.
+    (accepted, isa_attribute, "1.67.0", Some(74727), None),
     /// Allows some increased flexibility in the name resolution rules,
     /// especially around globs and shadowing (RFC 1560).
     (accepted, item_like_imports, "1.15.0", Some(35120), None),
+    /// Allows `'a: { break 'a; }`.
+    (accepted, label_break_value, "1.65.0", Some(48594), None),
+    /// Allows `let...else` statements.
+    (accepted, let_else, "1.65.0", Some(87335), None),
     /// Allows `break {expr}` with a value inside `loop`s.
     (accepted, loop_break_value, "1.19.0", Some(37339), None),
     /// Allows use of `?` as the Kleene "at most one" operator in macros.
@@ -216,6 +244,8 @@ declare_features! (
     (accepted, min_const_unsafe_fn, "1.33.0", Some(55607), None),
     /// Allows using `Self` and associated types in struct expressions and patterns.
     (accepted, more_struct_aliases, "1.16.0", Some(37544), None),
+    /// Allows using the MOVBE target feature.
+    (accepted, movbe_target_feature, "1.70.0", Some(44839), None),
     /// Allows patterns with concurrent by-move and by-ref bindings.
     /// For example, you can write `Foo(a, ref b)` where `a` is by-move and `b` is by-ref.
     (accepted, move_ref_pattern, "1.49.0", Some(68354), None),
@@ -223,6 +253,8 @@ declare_features! (
     (accepted, native_link_modifiers, "1.61.0", Some(81490), None),
     /// Allows specifying the bundle link modifier
     (accepted, native_link_modifiers_bundle, "1.63.0", Some(81490), None),
+    /// Allows specifying the verbatim link modifier
+    (accepted, native_link_modifiers_verbatim, "1.67.0", Some(81490), None),
     /// Allows specifying the whole-archive link modifier
     (accepted, native_link_modifiers_whole_archive, "1.61.0", Some(81490), None),
     /// Allows using non lexical lifetimes (RFC 2094).
@@ -237,6 +269,8 @@ declare_features! (
     (accepted, non_modrs_mods, "1.30.0", Some(44660), None),
     /// Allows the use of or-patterns (e.g., `0 | 1`).
     (accepted, or_patterns, "1.53.0", Some(54883), None),
+    /// Allows using `+bundle,+whole-archive` link modifiers with native libs.
+    (accepted, packed_bundled_libs, "1.74.0", Some(108081), None),
     /// Allows annotating functions conforming to `fn(&PanicInfo) -> !` with `#[panic_handler]`.
     /// This defines the behavior of panics.
     (accepted, panic_handler, "1.30.0", Some(44489), None),
@@ -252,6 +286,8 @@ declare_features! (
     (accepted, pub_restricted, "1.18.0", Some(32409), None),
     /// Allows use of the postfix `?` operator in expressions.
     (accepted, question_mark, "1.13.0", Some(31436), None),
+    /// Allows the use of raw-dylibs (RFC 2627).
+    (accepted, raw_dylib, "1.71.0", Some(58713), None),
     /// Allows keywords to be escaped for use as identifiers.
     (accepted, raw_identifiers, "1.30.0", Some(48589), None),
     /// Allows relaxing the coherence rules such that
