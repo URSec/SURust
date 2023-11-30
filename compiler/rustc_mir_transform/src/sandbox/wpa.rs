@@ -298,9 +298,12 @@ fn find_unsafe_alloc<'a>(summaries: &FxHashMap<FnID, Summary>,
         }
     }
 
-    if _DEBUG {
-        println!("Found {} unsafe allocation sites", wp_summary.len());
+    // Count the number of unsafe heap alloc
+    let mut unsafe_alloc = 0;
+    for (_, def_sites) in wp_summary {
+        unsafe_alloc += def_sites.len();
     }
+    println!("Unsafe heap alloc #: {}", unsafe_alloc);
 }
 
 /// Find unsafe fn arguments and non-heap-alloc calls that return unsafe value.

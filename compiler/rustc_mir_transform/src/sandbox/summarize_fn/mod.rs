@@ -193,7 +193,7 @@ impl Summary {
             self.ret_defs.1.contains(def_site);
     }
 
-    /// Check if a Callee is a a foreign function.
+    /// Check if a Callee is a foreign function.
     pub(crate) fn is_foreign_callee(&self, callee_fn_id: &FnID) -> bool {
         return self.foreign_callees.contains(callee_fn_id);
     }
