@@ -12,7 +12,7 @@ use crate::util::t;
 
 use crate::dist;
 use crate::tarball::GeneratedTarball;
-use crate::Compiler;
+use crate::{Compiler, Kind};
 
 use crate::builder::{Builder, RunConfig, ShouldRun, Step};
 use crate::config::{Config, TargetSelection};
@@ -45,6 +45,23 @@ fn sanitize_sh(path: &Path) -> String {
     }
 }
 
+fn is_dir_writable_for_user(dir: &PathBuf) -> bool {
+    let tmp = dir.join(".tmp");
+    match fs::create_dir_all(&tmp) {
+        Ok(_) => {
+            fs::remove_dir_all(tmp).unwrap();
+            true
+        }
+        Err(e) => {
+            if e.kind() == std::io::ErrorKind::PermissionDenied {
+                false
+            } else {
+                panic!("Failed the write access check for the current user. {}", e);
+            }
+        }
+    }
+}
+
 fn install_sh(
     builder: &Builder<'_>,
     package: &str,
@@ -52,10 +69,32 @@ fn install_sh(
     host: Option<TargetSelection>,
     tarball: &GeneratedTarball,
 ) {
-    builder.info(&format!("Install {} stage{} ({:?})", package, stage, host));
+    let _guard = builder.msg(Kind::Install, stage, package, host, host);
 
     let prefix = default_path(&builder.config.prefix, "/usr/local");
     let sysconfdir = prefix.join(default_path(&builder.config.sysconfdir, "/etc"));
+    let destdir_env = env::var_os("DESTDIR").map(PathBuf::from);
+
+    // Sanity checks on the write access of user.
+    //
+    // When the `DESTDIR` environment variable is present, there is no point to
+    // check write access for `prefix` and `sysconfdir` individually, as they
+    // are combined with the path from the `DESTDIR` environment variable. In
+    // this case, we only need to check the `DESTDIR` path, disregarding the
+    // `prefix` and `sysconfdir` paths.
+    if let Some(destdir) = &destdir_env {
+        assert!(is_dir_writable_for_user(destdir), "User doesn't have write access on DESTDIR.");
+    } else {
+        assert!(
+            is_dir_writable_for_user(&prefix),
+            "User doesn't have write access on `install.prefix` path in the `config.toml`.",
+        );
+        assert!(
+            is_dir_writable_for_user(&sysconfdir),
+            "User doesn't have write access on `install.sysconfdir` path in `config.toml`."
+        );
+    }
+
     let datadir = prefix.join(default_path(&builder.config.datadir, "share"));
     let docdir = prefix.join(default_path(&builder.config.docdir, "share/doc/rust"));
     let mandir = prefix.join(default_path(&builder.config.mandir, "share/man"));
@@ -68,13 +107,13 @@ fn install_sh(
     let mut cmd = Command::new(SHELL);
     cmd.current_dir(&empty_dir)
         .arg(sanitize_sh(&tarball.decompressed_output().join("install.sh")))
-        .arg(format!("--prefix={}", prepare_dir(prefix)))
-        .arg(format!("--sysconfdir={}", prepare_dir(sysconfdir)))
-        .arg(format!("--datadir={}", prepare_dir(datadir)))
-        .arg(format!("--docdir={}", prepare_dir(docdir)))
-        .arg(format!("--bindir={}", prepare_dir(bindir)))
-        .arg(format!("--libdir={}", prepare_dir(libdir)))
-        .arg(format!("--mandir={}", prepare_dir(mandir)))
+        .arg(format!("--prefix={}", prepare_dir(&destdir_env, prefix)))
+        .arg(format!("--sysconfdir={}", prepare_dir(&destdir_env, sysconfdir)))
+        .arg(format!("--datadir={}", prepare_dir(&destdir_env, datadir)))
+        .arg(format!("--docdir={}", prepare_dir(&destdir_env, docdir)))
+        .arg(format!("--bindir={}", prepare_dir(&destdir_env, bindir)))
+        .arg(format!("--libdir={}", prepare_dir(&destdir_env, libdir)))
+        .arg(format!("--mandir={}", prepare_dir(&destdir_env, mandir)))
         .arg("--disable-ldconfig");
     builder.run(&mut cmd);
     t!(fs::remove_dir_all(&empty_dir));
@@ -84,16 +123,16 @@ fn default_path(config: &Option<PathBuf>, default: &str) -> PathBuf {
     config.as_ref().cloned().unwrap_or_else(|| PathBuf::from(default))
 }
 
-fn prepare_dir(mut path: PathBuf) -> String {
+fn prepare_dir(destdir_env: &Option<PathBuf>, mut path: PathBuf) -> String {
     // The DESTDIR environment variable is a standard way to install software in a subdirectory
     // while keeping the original directory structure, even if the prefix or other directories
     // contain absolute paths.
     //
     // More information on the environment variable is available here:
     // https://www.gnu.org/prep/standards/html_node/DESTDIR.html
-    if let Some(destdir) = env::var_os("DESTDIR").map(PathBuf::from) {
+    if let Some(destdir) = destdir_env {
         let without_destdir = path.clone();
-        path = destdir;
+        path = destdir.clone();
         // Custom .join() which ignores disk roots.
         for part in without_destdir.components() {
             if let Component::Normal(s) = part {
@@ -182,15 +221,6 @@ install!((self, builder, _config),
             .expect("missing cargo");
         install_sh(builder, "cargo", self.compiler.stage, Some(self.target), &tarball);
     };
-    Rls, alias = "rls", Self::should_build(_config), only_hosts: true, {
-        if let Some(tarball) = builder.ensure(dist::Rls { compiler: self.compiler, target: self.target }) {
-            install_sh(builder, "rls", self.compiler.stage, Some(self.target), &tarball);
-        } else {
-            builder.info(
-                &format!("skipping Install RLS stage{} ({})", self.compiler.stage, self.target),
-            );
-        }
-    };
     RustAnalyzer, alias = "rust-analyzer", Self::should_build(_config), only_hosts: true, {
         if let Some(tarball) =
             builder.ensure(dist::RustAnalyzer { compiler: self.compiler, target: self.target })
@@ -212,8 +242,18 @@ install!((self, builder, _config),
         if let Some(tarball) = builder.ensure(dist::Miri { compiler: self.compiler, target: self.target }) {
             install_sh(builder, "miri", self.compiler.stage, Some(self.target), &tarball);
         } else {
+            // Miri is only available on nightly
             builder.info(
                 &format!("skipping Install miri stage{} ({})", self.compiler.stage, self.target),
+            );
+        }
+    };
+    LlvmTools, alias = "llvm-tools", Self::should_build(_config), only_hosts: true, {
+        if let Some(tarball) = builder.ensure(dist::LlvmTools { target: self.target }) {
+            install_sh(builder, "llvm-tools", self.compiler.stage, Some(self.target), &tarball);
+        } else {
+            builder.info(
+                &format!("skipping llvm-tools stage{} ({}): external LLVM", self.compiler.stage, self.target),
             );
         }
     };
@@ -244,18 +284,6 @@ install!((self, builder, _config),
                          self.compiler.stage, self.target),
             );
         }
-    };
-    Analysis, alias = "analysis", Self::should_build(_config), only_hosts: false, {
-        // `expect` should be safe, only None with host != build, but this
-        // only uses the `build` compiler
-        let tarball = builder.ensure(dist::Analysis {
-            // Find the actual compiler (handling the full bootstrap option) which
-            // produced the save-analysis data because that data isn't copied
-            // through the sysroot uplifting.
-            compiler: builder.compiler_for(builder.top_stage, builder.config.build, self.target),
-            target: self.target
-        }).expect("missing analysis");
-        install_sh(builder, "analysis", self.compiler.stage, Some(self.target), &tarball);
     };
     Rustc, path = "compiler/rustc", true, only_hosts: true, {
         let tarball = builder.ensure(dist::Rustc {

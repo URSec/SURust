@@ -114,7 +114,7 @@ struct DivergenceVisitor<'a, 'tcx> {
 impl<'a, 'tcx> DivergenceVisitor<'a, 'tcx> {
     fn maybe_walk_expr(&mut self, e: &'tcx Expr<'_>) {
         match e.kind {
-            ExprKind::Closure { .. } => {},
+            ExprKind::Closure(..) | ExprKind::If(..) | ExprKind::Loop(..) => {},
             ExprKind::Match(e, arms, _) => {
                 self.visit_expr(e);
                 for arm in arms {
@@ -128,6 +128,7 @@ impl<'a, 'tcx> DivergenceVisitor<'a, 'tcx> {
             _ => walk_expr(self, e),
         }
     }
+
     fn report_diverging_sub_expr(&mut self, e: &Expr<'_>) {
         span_lint(self.cx, DIVERGING_SUB_EXPRESSION, e.span, "sub-expression diverges");
     }
@@ -136,6 +137,15 @@ impl<'a, 'tcx> DivergenceVisitor<'a, 'tcx> {
 impl<'a, 'tcx> Visitor<'tcx> for DivergenceVisitor<'a, 'tcx> {
     fn visit_expr(&mut self, e: &'tcx Expr<'_>) {
         match e.kind {
+            // fix #10776
+            ExprKind::Block(block, ..) => match (block.stmts, block.expr) {
+                ([], Some(e)) => self.visit_expr(e),
+                ([stmt], None) => match stmt.kind {
+                    StmtKind::Expr(e) | StmtKind::Semi(e) => self.visit_expr(e),
+                    _ => {},
+                },
+                _ => {},
+            },
             ExprKind::Continue(_) | ExprKind::Break(_, _) | ExprKind::Ret(_) => self.report_diverging_sub_expr(e),
             ExprKind::Call(func, _) => {
                 let typ = self.cx.typeck_results().expr_ty(func);
@@ -186,14 +196,11 @@ fn check_for_unsequenced_reads(vis: &mut ReadVisitor<'_, '_>) {
     let map = &vis.cx.tcx.hir();
     let mut cur_id = vis.write_expr.hir_id;
     loop {
-        let parent_id = map.get_parent_node(cur_id);
+        let parent_id = map.parent_id(cur_id);
         if parent_id == cur_id {
             break;
         }
-        let parent_node = match map.find(parent_id) {
-            Some(parent) => parent,
-            None => break,
-        };
+        let Some(parent_node) = map.find(parent_id) else { break };
 
         let stop_early = match parent_node {
             Node::Expr(expr) => check_expr(vis, expr),
@@ -221,7 +228,7 @@ enum StopEarly {
     Stop,
 }
 
-fn check_expr<'a, 'tcx>(vis: &mut ReadVisitor<'a, 'tcx>, expr: &'tcx Expr<'_>) -> StopEarly {
+fn check_expr<'tcx>(vis: &mut ReadVisitor<'_, 'tcx>, expr: &'tcx Expr<'_>) -> StopEarly {
     if expr.hir_id == vis.last_expr.hir_id {
         return StopEarly::KeepGoing;
     }
@@ -232,7 +239,7 @@ fn check_expr<'a, 'tcx>(vis: &mut ReadVisitor<'a, 'tcx>, expr: &'tcx Expr<'_>) -
         | ExprKind::MethodCall(..)
         | ExprKind::Call(_, _)
         | ExprKind::Assign(..)
-        | ExprKind::Index(_, _)
+        | ExprKind::Index(..)
         | ExprKind::Repeat(_, _)
         | ExprKind::Struct(_, _, _) => {
             walk_expr(vis, expr);
@@ -268,7 +275,7 @@ fn check_expr<'a, 'tcx>(vis: &mut ReadVisitor<'a, 'tcx>, expr: &'tcx Expr<'_>) -
     StopEarly::KeepGoing
 }
 
-fn check_stmt<'a, 'tcx>(vis: &mut ReadVisitor<'a, 'tcx>, stmt: &'tcx Stmt<'_>) -> StopEarly {
+fn check_stmt<'tcx>(vis: &mut ReadVisitor<'_, 'tcx>, stmt: &'tcx Stmt<'_>) -> StopEarly {
     match stmt.kind {
         StmtKind::Expr(expr) | StmtKind::Semi(expr) => check_expr(vis, expr),
         // If the declaration is of a local variable, check its initializer

@@ -838,6 +838,10 @@ fn handle_result(
 
         // Ignore LF and CRLF difference for Windows.
         if !string_eq_ignore_newline_repr(&fmt_text, &text) {
+            if std::env::var_os("RUSTC_BLESS").is_some_and(|v| v != "0") {
+                std::fs::write(file_name, fmt_text).unwrap();
+                continue;
+            }
             let diff = make_diff(&text, &fmt_text, DIFF_CONTEXT_SIZE);
             assert!(
                 !diff.is_empty(),
@@ -982,11 +986,7 @@ fn rustfmt() -> PathBuf {
     assert!(
         me.is_file() || me.with_extension("exe").is_file(),
         "{}",
-        if cfg!(release) {
-            "no rustfmt bin, try running `cargo build --release` before testing"
-        } else {
-            "no rustfmt bin, try running `cargo build` before testing"
-        }
+        "no rustfmt bin, try running `cargo build` or `cargo build --release` before testing"
     );
     me
 }

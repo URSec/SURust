@@ -3,15 +3,14 @@ use clippy_utils::diagnostics::span_lint_and_sugg;
 use clippy_utils::source::snippet_with_applicability;
 use clippy_utils::ty::{is_type_diagnostic_item, same_type_and_consts};
 use clippy_utils::{
-    eq_expr_value, get_parent_expr_for_hir, get_parent_node, higher, is_else_clause, is_lang_ctor, over,
+    eq_expr_value, get_parent_expr_for_hir, get_parent_node, higher, is_else_clause, is_res_lang_ctor, over, path_res,
     peel_blocks_with_stmt,
 };
 use rustc_errors::Applicability;
 use rustc_hir::LangItem::OptionNone;
-use rustc_hir::{Arm, BindingAnnotation, Expr, ExprKind, FnRetTy, Node, Pat, PatKind, Path, QPath};
+use rustc_hir::{Arm, BindingAnnotation, ByRef, Expr, ExprKind, Guard, ItemKind, Node, Pat, PatKind, Path, QPath};
 use rustc_lint::LateContext;
 use rustc_span::sym;
-use rustc_typeck::hir_ty_to_ty;
 
 pub(crate) fn check_match(cx: &LateContext<'_>, ex: &Expr<'_>, arms: &[Arm<'_>], expr: &Expr<'_>) {
     if arms.len() > 1 && expr_ty_matches_p_ty(cx, ex, expr) && check_all_arms(cx, ex, arms) {
@@ -65,8 +64,26 @@ pub(crate) fn check_if_let<'tcx>(cx: &LateContext<'tcx>, ex: &Expr<'_>, if_let: 
 fn check_all_arms(cx: &LateContext<'_>, match_expr: &Expr<'_>, arms: &[Arm<'_>]) -> bool {
     for arm in arms {
         let arm_expr = peel_blocks_with_stmt(arm.body);
+
+        if let Some(guard_expr) = &arm.guard {
+            match guard_expr {
+                // gives up if `pat if expr` can have side effects
+                Guard::If(if_cond) => {
+                    if if_cond.can_have_side_effects() {
+                        return false;
+                    }
+                },
+                // gives up `pat if let ...` arm
+                Guard::IfLet(_) => {
+                    return false;
+                },
+            };
+        }
+
         if let PatKind::Wild = arm.pat.kind {
-            return eq_expr_value(cx, match_expr, strip_return(arm_expr));
+            if !eq_expr_value(cx, match_expr, strip_return(arm_expr)) {
+                return false;
+            }
         } else if !pat_same_as_expr(arm.pat, arm_expr) {
             return false;
         }
@@ -94,10 +111,7 @@ fn check_if_let_inner(cx: &LateContext<'_>, if_let: &higher::IfLet<'_>) -> bool 
             let ret = strip_return(else_expr);
             let let_expr_ty = cx.typeck_results().expr_ty(if_let.let_expr);
             if is_type_diagnostic_item(cx, let_expr_ty, sym::Option) {
-                if let ExprKind::Path(ref qpath) = ret.kind {
-                    return is_lang_ctor(cx, qpath, OptionNone) || eq_expr_value(cx, if_let.let_expr, ret);
-                }
-                return false;
+                return is_res_lang_ctor(cx, path_res(cx, ret), OptionNone) || eq_expr_value(cx, if_let.let_expr, ret);
             }
             return eq_expr_value(cx, if_let.let_expr, ret);
         }
@@ -126,11 +140,15 @@ fn expr_ty_matches_p_ty(cx: &LateContext<'_>, expr: &Expr<'_>, p_expr: &Expr<'_>
                 return same_type_and_consts(results.node_type(local.hir_id), results.expr_ty(expr));
             },
             // compare match_expr ty with RetTy in `fn foo() -> RetTy`
-            Node::Item(..) => {
-                if let Some(fn_decl) = p_node.fn_decl() {
-                    if let FnRetTy::Return(ret_ty) = fn_decl.output {
-                        return same_type_and_consts(hir_ty_to_ty(cx.tcx, ret_ty), cx.typeck_results().expr_ty(expr));
-                    }
+            Node::Item(item) => {
+                if let ItemKind::Fn(..) = item.kind {
+                    let output = cx
+                        .tcx
+                        .fn_sig(item.owner_id)
+                        .instantiate_identity()
+                        .output()
+                        .skip_binder();
+                    return same_type_and_consts(output, cx.typeck_results().expr_ty(expr));
                 }
             },
             // check the parent expr for this whole block `{ match match_expr {..} }`
@@ -171,8 +189,7 @@ fn pat_same_as_expr(pat: &Pat<'_>, expr: &Expr<'_>) -> bool {
                 },
             )),
         ) => {
-            return !matches!(annot, BindingAnnotation::Ref | BindingAnnotation::RefMut)
-                && pat_ident.name == first_seg.ident.name;
+            return !matches!(annot, BindingAnnotation(ByRef::Yes, _)) && pat_ident.name == first_seg.ident.name;
         },
         // Example: `Custom::TypeA => Custom::TypeB`, or `None => None`
         (PatKind::Path(QPath::Resolved(_, p_path)), ExprKind::Path(QPath::Resolved(_, e_path))) => {

@@ -2,8 +2,7 @@ use clippy_utils::diagnostics::span_lint_and_note;
 use clippy_utils::is_lint_allowed;
 use clippy_utils::macros::root_macro_call_first_node;
 use rustc_ast::LitKind;
-use rustc_hir::Expr;
-use rustc_hir::ExprKind;
+use rustc_hir::{Expr, ExprKind};
 use rustc_lint::{LateContext, LateLintPass};
 use rustc_session::{declare_tool_lint, impl_lint_pass};
 use rustc_span::sym;
@@ -60,7 +59,7 @@ impl LateLintPass<'_> for LargeIncludeFile {
             then {
                 let len = match &lit.node {
                     // include_bytes
-                    LitKind::ByteStr(bstr) => bstr.len(),
+                    LitKind::ByteStr(bstr, _) => bstr.len(),
                     // include_str
                     LitKind::Str(sym, _) => sym.as_str().len(),
                     _ => return,
